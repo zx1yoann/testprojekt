@@ -139,3 +139,32 @@ Dies ist ein Uebungsprojekt und **keine offizielle Abgabe**. Fuer eine Abgabe
 nach Wegleitung fehlen: ausgefuellte Projektskizze, Logfiles 01–03,
 Arbeitsplan mit Aufgabenteilung, Actionvideo und die vorgeschriebene
 Snake-Case-Benennung der Abgabedateien.
+
+## Browser-Fassung
+
+Unter `web/index.html` liegt zusaetzlich eine Browser-Version des Spiels in
+HTML und JavaScript. Sie laeuft ohne Installation auf Tablet, Handy und
+Laptop und enthaelt gegenueber der PyGame-Fassung zusaetzlich:
+
+- **Punch-Mechanik** (`X` oder antippen) mit Abklingzeit: Kisten und Drohnen
+  lassen sich zerschlagen, alles andere nicht. Zerschlagbares ist gruen
+  umrandet.
+- **Gluecksrad**: Fuer 100 Coins drehen und Skins, Power-Ups, Revives oder
+  Coins gewinnen. Acht gleich grosse Felder, die Anzeige entspricht also
+  genau den Gewinnchancen.
+- **Sechs Skins** fuer die Spielfigur, rein kosmetisch.
+- **Unbegrenzte Beschleunigung**: Das Tempo hat keine Obergrenze. Der
+  Hindernisabstand skaliert mit, damit die Reaktionszeit konstant bleibt.
+- **Fuenf Power-Ups**: Magnet, Schild, doppelte Coins, Zeitlupe, Boost.
+- **Touch-Steuerung**: Wischen zum Ausweichen, Tippen zum Punchen.
+
+Fortschritt (Coins, Skins, Highscores) wird lokal gespeichert und ueber die
+Artifact-Datenablage zusaetzlich geraeteuebergreifend synchronisiert.
+
+Die Musik ist wie in der PyGame-Fassung synthetisiert. In `web/index.html`
+steht oben `AUDIO_FILES` - traegt man dort eigene Musik als data-URI ein,
+wird diese statt der synthetisierten Musik verwendet.
+
+Hinweis: Die Browser-Fassung erfuellt die Wegleitung NICHT, die
+ausdruecklich PyGame und ein `main.py` verlangt. Sie ist zum Ausprobieren
+und Zeigen gedacht; abgabetauglich ist die PyGame-Version im Wurzelverzeichnis.

@@ -1,0 +1,2273 @@
+<title>Neon Rush</title>
+<style>
+  /* Das Spiel lebt vollstaendig im Canvas. Die Seite drumherum ist bewusst
+     nur Buehne: schwarzer Grund, das Bild mittig, keine Scrollleisten.
+     Einheitliche Optik (Neon-Arcade), deshalb bewusst nur ein Theme -
+     jede Farbe ist explizit gesetzt, damit die Seite auf jedem Grund haelt. */
+  :root {
+    --ink:     #07060f;
+    --night:   #150f2e;
+    --magenta: #ff2d95;
+    --cyan:    #34ebff;
+  }
+  html, body {
+    height: 100%;
+    margin: 0;
+    background: var(--ink);
+    overflow: hidden;
+    overscroll-behavior: none;
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #stage {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--ink);
+  }
+  canvas {
+    display: block;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    touch-action: none;
+  }
+  /* Vor dem ersten Frame: ein ruhiger Ladezustand statt schwarzer Flaeche. */
+  #boot {
+    position: fixed;
+    inset: 0;
+    display: grid;
+    place-content: center;
+    gap: 14px;
+    justify-items: center;
+    background: var(--ink);
+    color: var(--cyan);
+    font: 600 13px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+  }
+  #boot .bar { width: 160px; height: 6px; background: var(--night); overflow: hidden; }
+  #boot .bar i { display: block; height: 100%; width: 40%; background: var(--magenta);
+                 animation: slide 1.1s ease-in-out infinite; }
+  @keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(300%); } }
+  @media (prefers-reduced-motion: reduce) { #boot .bar i { animation: none; width: 100%; } }
+
+  /* Ein Endless Runner braucht Breite. Im Hochformat waere das Bild nur ein
+     schmaler Streifen - deshalb hier ein klarer Hinweis statt eines
+     unspielbar kleinen Spielfelds. */
+  #rotate { display: none; }
+  @media (orientation: portrait) and (max-width: 1100px) {
+    #rotate {
+      position: fixed; inset: 0; z-index: 9;
+      display: grid; place-content: center; gap: 18px; justify-items: center;
+      background: var(--ink); color: var(--cyan); text-align: center;
+      padding: 24px;
+      font: 600 13px/1.6 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      letter-spacing: .16em; text-transform: uppercase;
+    }
+    #rotate b { color: var(--magenta); font-size: 17px; letter-spacing: .2em; }
+    #rotate span { color: #8a84b4; letter-spacing: .1em; text-transform: none;
+                   font-size: 12px; max-width: 30ch; }
+    #rotate .ph { width: 54px; height: 86px; border: 3px solid var(--cyan);
+                  border-radius: 8px; animation: turn 2.4s ease-in-out infinite; }
+    @keyframes turn { 0%,40% { transform: rotate(0); } 60%,100% { transform: rotate(-90deg); } }
+    @media (prefers-reduced-motion: reduce) { #rotate .ph { animation: none;
+      transform: rotate(-90deg); } }
+  }
+</style>
+
+<div id="stage"><canvas id="screen"></canvas></div>
+<div id="boot">Neon Rush<div class="bar"><i></i></div></div>
+<div id="rotate">
+  <div class="ph"></div>
+  <b>Gerät drehen</b>
+  <span>Neon Rush läuft im Querformat. Dreh dein Gerät quer, dann geht es los.</span>
+</div>
+
+<script>
+"use strict";
+/* ==========================================================================
+   NEON RUSH  -  Pixel Endless Runner
+   --------------------------------------------------------------------------
+   Browser-Fassung. Alle Grafiken, die Schrift und alle Klaenge entstehen zur
+   Laufzeit im Code - es wird keine einzige externe Bild-, Schrift- oder
+   Audiodatei geladen.
+
+   MUSIK AUSTAUSCHEN
+   Weiter unten steht AUDIO_FILES. Traegt man dort eine Musikdatei als
+   data:-URI ein, benutzt das Spiel diese statt der synthetisierten Musik.
+   Der Rest des Codes bleibt unveraendert.
+   ========================================================================== */
+
+/* ------------------------------------------------------------------ Bild */
+const VW = 480, VH = 270;                  // virtuelle Aufloesung
+const cvs = document.getElementById("screen");
+const ctx = cvs.getContext("2d", { alpha: false });
+const buf = document.createElement("canvas");
+buf.width = VW; buf.height = VH;
+const g = buf.getContext("2d", { alpha: false });
+g.imageSmoothingEnabled = false;
+ctx.imageSmoothingEnabled = false;
+
+let viewScale = 1, viewX = 0, viewY = 0;
+
+function resize() {
+  const w = window.innerWidth, h = window.innerHeight;
+  viewScale = Math.min(w / VW, h / VH);
+  const dw = Math.round(VW * viewScale), dh = Math.round(VH * viewScale);
+  cvs.width = dw; cvs.height = dh;
+  cvs.style.width = dw + "px"; cvs.style.height = dh + "px";
+  const r = cvs.getBoundingClientRect();
+  viewX = r.left; viewY = r.top;
+  ctx.imageSmoothingEnabled = false;
+}
+window.addEventListener("resize", resize);
+window.addEventListener("orientationchange", () => setTimeout(resize, 120));
+
+/* ----------------------------------------------------------------- Farben */
+const C = {
+  deep:   "#0d0a1e",
+  mid:    "#1a1436",
+  near:   "#281e4a",
+  track:  "#1e183a",
+  line:   "#483a7a",
+  rail:   "#5e5096",
+  magenta:"#ff2d95",
+  cyan:   "#34ebff",
+  lime:   "#aaff46",
+  amber:  "#ffba30",
+  violet: "#a85cff",
+  white:  "#f5f5ff",
+  light:  "#c6c4e0",
+  grey:   "#76709c",
+  dark:   "#16122a",
+  black:  "#060410",
+};
+
+/* ====================================================================== */
+/*  EIGENE PIXELSCHRIFT                                                    */
+/*  Jede Glyphe ist ein von Hand gezeichnetes 5x7-Raster. '#' = Pixel.     */
+/* ====================================================================== */
+const GW = 5, GH = 7;
+/* Jede Glyphe: genau 7 Zeilen zu 5 Zeichen. '#' = Pixel gesetzt.
+   Die Zeilenform ist bewusst gewaehlt - so ist beim Lesen sofort
+   sichtbar, wie der Buchstabe aussieht, und ein Tippfehler faellt auf. */
+const GLYPH_ROWS = {
+  "A": [".###.","#...#","#...#","#####","#...#","#...#","#...#"],
+  "B": ["####.","#...#","#...#","####.","#...#","#...#","####."],
+  "C": [".###.","#...#","#....","#....","#....","#...#",".###."],
+  "D": ["####.","#...#","#...#","#...#","#...#","#...#","####."],
+  "E": ["#####","#....","#....","####.","#....","#....","#####"],
+  "F": ["#####","#....","#....","####.","#....","#....","#...."],
+  "G": [".###.","#...#","#....","#.###","#...#","#...#",".###."],
+  "H": ["#...#","#...#","#...#","#####","#...#","#...#","#...#"],
+  "I": ["#####","..#..","..#..","..#..","..#..","..#..","#####"],
+  "J": ["..###","...#.","...#.","...#.","...#.","#..#.",".##.."],
+  "K": ["#...#","#..#.","#.#..","##...","#.#..","#..#.","#...#"],
+  "L": ["#....","#....","#....","#....","#....","#....","#####"],
+  "M": ["#...#","##.##","#.#.#","#...#","#...#","#...#","#...#"],
+  "N": ["#...#","##..#","#.#.#","#..##","#...#","#...#","#...#"],
+  "O": [".###.","#...#","#...#","#...#","#...#","#...#",".###."],
+  "P": ["####.","#...#","#...#","####.","#....","#....","#...."],
+  "Q": [".###.","#...#","#...#","#...#","#.#.#","#..#.",".##.#"],
+  "R": ["####.","#...#","#...#","####.","#.#..","#..#.","#...#"],
+  "S": [".####","#....","#....",".###.","....#","....#","####."],
+  "T": ["#####","..#..","..#..","..#..","..#..","..#..","..#.."],
+  "U": ["#...#","#...#","#...#","#...#","#...#","#...#",".###."],
+  "V": ["#...#","#...#","#...#","#...#","#...#",".#.#.","..#.."],
+  "W": ["#...#","#...#","#...#","#...#","#.#.#","##.##","#...#"],
+  "X": ["#...#","#...#",".#.#.","..#..",".#.#.","#...#","#...#"],
+  "Y": ["#...#","#...#",".#.#.","..#..","..#..","..#..","..#.."],
+  "Z": ["#####","....#","...#.","..#..",".#...","#....","#####"],
+  "0": [".###.","#...#","#..##","#.#.#","##..#","#...#",".###."],
+  "1": ["..#..",".##..","..#..","..#..","..#..","..#..",".###."],
+  "2": [".###.","#...#","....#","...#.","..#..",".#...","#####"],
+  "3": ["#####","...#.","..#..","...#.","....#","#...#",".###."],
+  "4": ["...#.","..##.",".#.#.","#..#.","#####","...#.","...#."],
+  "5": ["#####","#....","####.","....#","....#","#...#",".###."],
+  "6": ["..##.",".#...","#....","####.","#...#","#...#",".###."],
+  "7": ["#####","....#","...#.","..#..",".#...",".#...",".#..."],
+  "8": [".###.","#...#","#...#",".###.","#...#","#...#",".###."],
+  "9": [".###.","#...#","#...#",".####","....#","...#.",".##.."],
+  " ": [".....",".....",".....",".....",".....",".....","....."],
+  ".": [".....",".....",".....",".....",".....",".##..",".##.."],
+  ",": [".....",".....",".....",".....",".##..",".##..",".#..."],
+  ":": [".....",".##..",".##..",".....",".##..",".##..","....."],
+  ";": [".....",".##..",".##..",".....",".##..",".##..",".#..."],
+  "!": ["..#..","..#..","..#..","..#..","..#..",".....","..#.."],
+  "?": [".###.","#...#","....#","...#.","..#..",".....","..#.."],
+  "-": [".....",".....",".....","#####",".....",".....","....."],
+  "_": [".....",".....",".....",".....",".....",".....","#####"],
+  "+": [".....","..#..","..#..","#####","..#..","..#..","....."],
+  "=": [".....",".....","#####",".....","#####",".....","....."],
+  "/": ["....#","....#","...#.","..#..",".#...","#....","#...."],
+  "'": ["..#..","..#..",".....",".....",".....",".....","....."],
+  "(": ["...#.","..#..",".#...",".#...",".#...","..#..","...#."],
+  ")": [".#...","..#..","...#.","...#.","...#.","..#..",".#..."],
+  "%": ["##..#","##..#","...#.","..#..",".#...","#..##","#..##"],
+  "*": [".....","#.#.#",".###.","#####",".###.","#.#.#","....."],
+  "<": ["...#.","..#..",".#...","#....",".#...","..#..","...#."],
+  ">": [".#...","..#..","...#.","....#","...#.","..#..",".#..."],
+  "x": [".....",".....","#...#",".#.#.","..#..",".#.#.","#...#"],
+  "&": [".##..","#..#.","#.#..",".#...","#.#.#","#..#.",".##.#"],
+};
+const GLYPHS = {};
+for (const k in GLYPH_ROWS) GLYPHS[k] = GLYPH_ROWS[k].join("");
+const FALLBACK = ["#####","#...#","#...#","#...#","#...#","#...#","#####"].join("");
+
+const TRANS = { "Ä":"AE","Ö":"OE","Ü":"UE","ä":"AE","ö":"OE","ü":"UE","ß":"SS" };
+function norm(t) {
+  let out = "";
+  for (const ch of String(t)) out += TRANS[ch] || ch;
+  return out.toUpperCase();
+}
+function textW(t, s = 1, sp = 1) {
+  const n = norm(t);
+  return n.length ? n.length * (GW + sp) * s - sp * s : 0;
+}
+/** Zeichnet Text als Pixelraster. align: left | center | right */
+function text(t, x, y, s = 1, col = C.white, align = "left", glow = null, sp = 1) {
+  const n = norm(t);
+  const w = textW(t, s, sp);
+  let px = align === "center" ? x - (w >> 1) : align === "right" ? x - w : x;
+  px = Math.round(px); y = Math.round(y);
+  if (glow) {
+    // Der Versatz waechst nur halb so schnell wie die Schrift, sonst
+    // verschwimmt eine grosse Ueberschrift in einer Wolke.
+    const step = Math.max(1, s >> 1);
+    g.globalAlpha = 0.42;
+    for (const [dx, dy] of [[-step,0],[step,0],[0,-step],[0,step]])
+      rawText(n, px + dx, y + dy, s, glow, sp);
+    g.globalAlpha = 1;
+  }
+  rawText(n, px, y, s, col, sp);
+  return { x: px, y, w, h: GH * s };
+}
+function rawText(n, x, y, s, col, sp) {
+  g.fillStyle = col;
+  let cx = x;
+  for (const ch of n) {
+    const rows = GLYPHS[ch] || FALLBACK;
+    for (let r = 0; r < GH; r++) {
+      let run = 0;
+      for (let c = 0; c <= GW; c++) {
+        const on = c < GW && rows[r * GW + c] === "#";
+        if (on) run++;
+        else if (run) { g.fillRect(cx + (c - run) * s, y + r * s, run * s, s); run = 0; }
+      }
+    }
+    cx += (GW + sp) * s;
+  }
+}
+function wrap(t, maxW, s = 1) {
+  const words = String(t).split(" ");
+  const lines = []; let cur = "";
+  for (const w of words) {
+    const probe = cur ? cur + " " + w : w;
+    if (textW(probe, s) <= maxW || !cur) cur = probe;
+    else { lines.push(cur); cur = w; }
+  }
+  if (cur) lines.push(cur);
+  return lines;
+}
+
+/* ====================================================================== */
+/*  SPRITES - alle Grafiken als Textraster im Code                         */
+/* ====================================================================== */
+const PAL = {
+  ".": null,
+  H: "#261c3e", S: "#ffcea8", J: C.cyan, D: "#1894b8", P: "#804ed6", B: C.magenta,
+  W: C.white, Y: C.amber, O: "#d68018", R: "#e82e46", G: C.lime, V: C.violet,
+  K: C.black, M: "#6066 80".replace(" ",""), N: "#383c52", A: "#b0bad6",
+  T: "#8a5a2b", U: "#5e3c1c", E: "#c98a46",
+};
+PAL.M = "#606680";
+
+/** Wandelt ein Textraster in ein fertiges Canvas um. */
+function makeSprite(rows, palette) {
+  const p = palette || PAL;
+  const w = Math.max(...rows.map(r => r.length)), h = rows.length;
+  const c = document.createElement("canvas");
+  c.width = w; c.height = h;
+  const x = c.getContext("2d");
+  for (let y = 0; y < h; y++) {
+    for (let i = 0; i < rows[y].length; i++) {
+      const col = p[rows[y][i]];
+      if (col) { x.fillStyle = col; x.fillRect(i, y, 1, 1); }
+    }
+  }
+  return c;
+}
+
+/* --- Spielfigur. Blick auf den Ruecken, wie im Genre ueblich. --- */
+const RUN_A = [
+  "....HHHH....","...HHHHHH...","...HHHHHH...","...HSSSSH...","..DJJJJJJD..",
+  ".JJJJJJJJJJ.",".JJJJWWJJJJ.","SJJJJWWJJJJS","SDJJJJJJJJDS","..JJJJJJJJ..",
+  "..DJJJJJJD..","...PPPPPP...","...PPPPPP...","...PP..PP...","...PP..PP...",
+  "...PP..PP...","..BBB..BBB..","..BBB..BBB..",
+];
+const RUN_B = [
+  "....HHHH....","...HHHHHH...","...HHHHHH...","...HSSSSH...","..DJJJJJJD..",
+  ".JJJJJJJJJJ.","SJJJJWWJJJJ.","SJJJJWWJJJJS",".DJJJJJJJJDS","..JJJJJJJJ..",
+  "..DJJJJJJD..","...PPPPPP...","...PPPPPP...","..PPP...PP..","..PP....PP..",
+  "..PP....PPP.",".BBB.....BBB",".BBB.....BBB",
+];
+const RUN_C = [
+  "....HHHH....","...HHHHHH...","...HHHHHH...","...HSSSSH...","..DJJJJJJD..",
+  ".JJJJJJJJJJ.",".JJJJWWJJJJS","SJJJJWWJJJJS","SDJJJJJJJJD.","..JJJJJJJJ..",
+  "..DJJJJJJD..","...PPPPPP...","...PPPPPP...","..PP...PPP..","..PP....PP..",
+  ".PPP....PP..","BBB.....BBB.","BBB.....BBB.",
+];
+const JUMP = [
+  "..S.HHHH.S..","..SHHHHHHS..","..SHHHHHHS..","..SHSSSSHS..","..DJJJJJJD..",
+  "..JJJJJJJJ..","..JJJWWJJJ..","..JJJWWJJJ..","..DJJJJJJD..","...PPPPPP...",
+  "...PPPPPP...","..PPP..PPP..","..PP....PP..","..PP....PP..","..BBB..BBB..",
+  "..BBB..BBB..","............","............",
+];
+const SLIDE = [
+  "............","............","............","............","............",
+  "............","............","....HHHH....","..HHHHHHSS..","SDJJJJJJJJS.",
+  "SJJJWWJJJJ..",".JJJJJJJPPP.","..PPPPPPPPP.","..PPPPPPPP..",".BBB...BBB..",
+  ".BBB...BBB..","............","............",
+];
+/* Punch-Pose: der Arm schiesst nach vorne, der Koerper dreht mit. */
+const PUNCH = [
+  "....HHHH....","...HHHHHH...","...HHHHHH...","...HSSSSH...","..DJJJJJJD..",
+  ".JJJJJJJJJJ.",".JJJJWWJJJJ.","SSSSJWWJJJJ.","SSSSJJJJJJDS","..JJJJJJJJ..",
+  "..DJJJJJJD..","...PPPPPP...","...PPPPPP...","..PPP...PP..","..PP....PP..",
+  "..PP....PPP.",".BBB.....BBB",".BBB.....BBB",
+];
+const CRASH = [
+  "..W......W..","...W....W...","....HHHH....","...HSSSSH...","..HHHHHHHH..",
+  "SD.JJJJJJ.DS",".JJJJRRJJJJ.","..JJJRRJJJ..","..DJJJJJJD..","...PPPPPP...",
+  "..PPP..PPP..",".PP......PP.",".BB......BB.",".BBB....BBB.","............",
+  "..W......W..","............","............",
+];
+
+const BARRIER = [
+  "RRRRWWWWRRRRWWWW","RRRRWWWWRRRRWWWW","WWWWRRRRWWWWRRRR","WWWWRRRRWWWWRRRR",
+  "MMMMMMMMMMMMMMMM","NNNNNNNNNNNNNNNN","..M..........M..","..M..........M..",
+  "..M..........M..","..N..........N..",
+];
+const LOWBAR = [
+  "..M..........M..","..M..........M..","MMMMMMMMMMMMMMMM","YYYYKKKKYYYYKKKK",
+  "YYYYKKKKYYYYKKKK","MMMMMMMMMMMMMMMM","..N..........N..","..N..........N..",
+  "..N..........N..","..N..........N..",
+];
+const TRAIN = [
+  ".MMMMMMMMMMMMMM.","MAAAAAAAAAAAAAAM","MAVVVVVVVVVVVVAM","MAVWWWVVVVWWWVAM",
+  "MAVWWWVVVVWWWVAM","MAVWWWVVVVWWWVAM","MAVVVVVVVVVVVVAM","MAVVVVVVVVVVVVAM",
+  "MANNNNNNNNNNNNAM","MAVVVVVVVVVVVVAM","MAVVVYYYYYYVVVAM","MAVVVYYYYYYVVVAM",
+  "MAVVVVVVVVVVVVAM","MAAAAAAAAAAAAAAM","MMMMMMMMMMMMMMMM",".NN.NNNNNNNN.NN.",
+];
+/* Kiste: zerschlagbar. Die Holzoptik unterscheidet sie sofort von den
+   Hindernissen, die man NICHT punchen kann. */
+const CRATE = [
+  "UUUUUUUUUUUU","UTTTTTTTTTTU","UTEETTTTEETU","UTETTEETTETU",
+  "UTTTEEEETTTU","UTTTEEEETTTU","UTETTEETTETU","UTEETTTTEETU",
+  "UTTTTTTTTTTU","UUUUUUUUUUUU",
+];
+/* Drohne: fliegt, blockiert die Spur, zerschlagbar. */
+const DRONE = [
+  "M..MMMM..M..","MMMAAAAMMM..",".M.AWWAM.M..","...AWWA.....",
+  "..AAWWAA....","..RAAAAR....","...R..R.....","............",
+];
+const COIN = ["..YYYY..",".YYOOYY.","YYOWWOYY","YOWWWWOY","YOWWWWOY","YYOWWOYY",".YYOOYY.","..YYYY.."];
+const P_MAGNET = ["..RRRR..",".RRRRRR.","RR....RR","RR....RR","RR....RR","WW....WW","WW....WW","........"];
+const P_SHIELD = ["..GGGG..",".GGGGGG.","GGWWWWGG","GGWGGWGG","GGWGGWGG",".GGWWGG.","..GGGG..","...GG..."];
+const P_DOUBLE = ["YY....YY","YYY..YYY",".YYYYYY.","..YYYY..","..YYYY..",".YYYYYY.","YYY..YYY","YY....YY"];
+const P_SLOWMO = ["..VVVV..",".VWWWWV.","VWW.WWWV","VWW.WWWV","VWW..WWV",".VWWWWV.","..VVVV..","........"];
+const P_BOOST  = ["...GG...","..GGGG..",".GGWWGG.","GGWWWWGG","..GWWG..","..GWWG..","...GG...","........"];
+
+/* --- Skins: Palettenvarianten der Figur. Rein kosmetisch, damit der
+       Highscore vergleichbar bleibt. --- */
+const SKINS = [
+  { id:"runner", name:"RUNNER", J:C.cyan,    D:"#1894b8", P:"#804ed6", B:C.magenta, H:"#261c3e" },
+  { id:"magma",  name:"MAGMA",  J:"#ff7a2d", D:"#b84a10", P:"#7a2416", B:C.amber,   H:"#2e1508" },
+  { id:"toxic",  name:"TOXIC",  J:C.lime,    D:"#5f9e1c", P:"#2d5e2a", B:"#d4ff7a", H:"#12280c" },
+  { id:"void",   name:"VOID",   J:"#6b4bb8", D:"#3a2570", P:"#1e1440", B:C.violet,  H:"#0c0820" },
+  { id:"gold",   name:"GOLD",   J:C.amber,   D:"#b8820f", P:"#6e4a08", B:"#fff2b0", H:"#2e2205" },
+  { id:"ghost",  name:"GHOST",  J:"#d8e4ff", D:"#8fa0c8", P:"#5a6890", B:"#ffffff", H:"#39415e" },
+];
+const SPR = {};
+function buildSprites() {
+  SPR.barrier = makeSprite(BARRIER); SPR.lowbar = makeSprite(LOWBAR);
+  SPR.train = makeSprite(TRAIN);     SPR.crate  = makeSprite(CRATE);
+  SPR.drone = makeSprite(DRONE);     SPR.coin   = makeSprite(COIN);
+  SPR.magnet = makeSprite(P_MAGNET); SPR.shield = makeSprite(P_SHIELD);
+  SPR.double = makeSprite(P_DOUBLE); SPR.slowmo = makeSprite(P_SLOWMO);
+  SPR.boost  = makeSprite(P_BOOST);
+  SPR.skins = {};
+  for (const sk of SKINS) {
+    const p = Object.assign({}, PAL, { J:sk.J, D:sk.D, P:sk.P, B:sk.B, H:sk.H });
+    SPR.skins[sk.id] = {
+      run:   [makeSprite(RUN_A,p), makeSprite(RUN_B,p), makeSprite(RUN_A,p), makeSprite(RUN_C,p)],
+      jump:  makeSprite(JUMP,p),  slide: makeSprite(SLIDE,p),
+      punch: makeSprite(PUNCH,p), crash: makeSprite(CRASH,p),
+    };
+  }
+}
+function drawSprite(sp, cx, bottomY, scale) {
+  const w = Math.max(1, Math.round(sp.width * scale));
+  const h = Math.max(1, Math.round(sp.height * scale));
+  g.drawImage(sp, Math.round(cx - w / 2), Math.round(bottomY - h), w, h);
+  return { w, h };
+}
+
+/* --- Hintergrund: Skyline und Sterne, mit festem Seed erzeugt. --- */
+function rng(seed) { let s = seed >>> 0; return () => (s = (s * 1664525 + 1013904223) >>> 0) / 4294967296; }
+function makeSkyline(w, h, seed, near) {
+  const r = rng(seed);
+  const c = document.createElement("canvas"); c.width = w; c.height = h;
+  const x = c.getContext("2d");
+  const body = near ? C.near : C.mid;
+  const wins = [C.amber, C.cyan, C.magenta];
+  let px = 0;
+  while (px < w) {
+    const bw = 14 + Math.floor(r() * 21);
+    const bh = Math.floor(h * (0.3 + r() * 0.65));
+    const top = h - bh;
+    x.fillStyle = body; x.fillRect(px, top, bw, bh);
+    if (r() < 0.3) {
+      x.fillRect(px + (bw >> 1), Math.max(0, top - 8), 1, 8);
+      x.fillStyle = C.magenta; x.fillRect(px + (bw >> 1), Math.max(0, top - 9), 1, 2);
+    }
+    for (let wy = top + 3; wy < h - 2; wy += 5)
+      for (let wx = px + 2; wx < px + bw - 2; wx += 4)
+        if (r() < 0.34) { x.fillStyle = wins[Math.floor(r() * 3)]; x.fillRect(wx, wy, 2, 2); }
+    px += bw + 1 + Math.floor(r() * 4);
+  }
+  return c;
+}
+function makeStars(w, h, seed, n) {
+  const r = rng(seed);
+  const c = document.createElement("canvas"); c.width = w; c.height = h;
+  const x = c.getContext("2d");
+  for (let i = 0; i < n; i++) {
+    const b = 90 + Math.floor(r() * 140);
+    x.fillStyle = `rgb(${b},${b},${Math.min(255, b + 25)})`;
+    x.fillRect(Math.floor(r() * w), Math.floor(r() * h), 1, 1);
+  }
+  return c;
+}
+let BG = {};
+function buildBackground() {
+  BG.stars = makeStars(VW * 2, 150, 5, 150);
+  BG.far   = makeSkyline(VW * 2, 60, 17, false);
+  BG.near  = makeSkyline(VW * 2, 42, 23, true);
+  BG.farG  = makeSkyline(VW * 2, 46, 11, false);
+  BG.nearG = makeSkyline(VW * 2, 34, 29, true);
+}
+
+/* ====================================================================== */
+/*  KLANG - alles synthetisiert (Web Audio)                                */
+/*  Eigene MP3s koennen hier als data:-URI eingetragen werden.             */
+/* ====================================================================== */
+const AUDIO_FILES = { menu: null, game: null, blackout: null };
+
+const Sound = (() => {
+  let ac = null, master = null, musicGain = null, sfxGain = null;
+  let started = false, muted = false;
+  let musicVol = 0.5, sfxVol = 0.8;
+  let curTrack = null, timer = null, step = 0, nextT = 0;
+  let htmlAudio = null;
+
+  const NOTES = { C:-9, D:-7, E:-5, F:-4, G:-2, A:0, B:2 };
+  function freq(n) {
+    if (n === "-") return 0;
+    const m = /^([A-G])(#?)(-?\d)$/.exec(n);
+    if (!m) return 0;
+    return 440 * Math.pow(2, (NOTES[m[1]] + (m[2] ? 1 : 0) + (+m[3] - 4) * 12) / 12);
+  }
+  // Zwei Stuecke in a-Moll. Jeder Eintrag: [Note, Achtel].
+  const TRACKS = {
+    menu: { bpm: 104, lead: [["A4",1],["C5",1],["E5",1],["D5",1],["C5",1],["A4",1],["G4",1],["A4",1],
+              ["F4",1],["A4",1],["C5",1],["A4",1],["G4",1],["B4",1],["D5",1],["E5",1]],
+            bass: [["A2",2],["A2",2],["F2",2],["G2",2],["A2",2],["A2",2],["C3",2],["E3",2]] },
+    game: { bpm: 146, lead: [["A4",1],["C5",1],["E5",1],["G5",1],["E5",1],["C5",1],["A4",1],["E4",1],
+              ["F4",1],["A4",1],["C5",1],["E5",1],["D5",1],["B4",1],["G4",1],["B4",1],
+              ["A4",1],["E5",1],["A5",1],["E5",1],["C5",1],["E5",1],["A4",1],["C5",1],
+              ["F4",2],["G4",2],["A4",2],["-",2]],
+            bass: [["A2",2],["A2",2],["F2",2],["G2",2],["A2",2],["A2",2],["C3",2],["E3",2],
+                   ["F2",2],["F2",2],["G2",2],["G2",2],["A2",4],["-",2]] },
+    blackout: { bpm: 96, lead: [["A3",2],["-",1],["C4",1],["B3",2],["-",2],["E3",2],["-",1],["G3",1],
+                  ["F3",2],["-",2],["A3",2],["C4",2],["E4",2],["D4",2],["C4",4],["-",4]],
+            bass: [["A1",4],["F1",4],["G1",4],["E1",4],["A1",4],["C2",4],["D2",4],["-",4]] },
+  };
+
+  function init() {
+    if (ac) return true;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return false;
+    try { ac = new AC(); } catch (e) { return false; }
+    master = ac.createGain(); master.gain.value = 1; master.connect(ac.destination);
+    musicGain = ac.createGain(); musicGain.connect(master);
+    sfxGain = ac.createGain(); sfxGain.connect(master);
+    applyVol();
+    return true;
+  }
+  function applyVol() {
+    if (!ac) return;
+    musicGain.gain.value = muted ? 0 : musicVol * 0.5;
+    sfxGain.gain.value = muted ? 0 : sfxVol * 0.5;
+    if (htmlAudio) htmlAudio.volume = muted ? 0 : musicVol;
+  }
+  function unlock() {
+    if (!init()) return;
+    if (ac.state === "suspended") ac.resume();
+    started = true;
+  }
+
+  /* Ein Ton: Oszillator mit Huellkurve. Ohne Huellkurve knackt jeder Ton. */
+  function tone(f, dur, type, vol, when, glideTo) {
+    if (!ac || muted) return;
+    const t = when || ac.currentTime;
+    const o = ac.createOscillator(), gn = ac.createGain();
+    o.type = type || "square";
+    o.frequency.setValueAtTime(f, t);
+    if (glideTo) o.frequency.exponentialRampToValueAtTime(Math.max(1, glideTo), t + dur);
+    gn.gain.setValueAtTime(0, t);
+    gn.gain.linearRampToValueAtTime(vol, t + Math.min(0.012, dur * 0.2));
+    gn.gain.exponentialRampToValueAtTime(0.0008, t + dur);
+    o.connect(gn); gn.connect(sfxGain);
+    o.start(t); o.stop(t + dur + 0.02);
+  }
+  function noise(dur, vol, when, filterHz) {
+    if (!ac || muted) return;
+    const t = when || ac.currentTime;
+    const n = Math.floor(ac.sampleRate * dur);
+    const b = ac.createBuffer(1, n, ac.sampleRate), d = b.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / n, 2);
+    const src = ac.createBufferSource(); src.buffer = b;
+    const gn = ac.createGain(); gn.gain.value = vol;
+    if (filterHz) {
+      const f = ac.createBiquadFilter(); f.type = "lowpass"; f.frequency.value = filterHz;
+      src.connect(f); f.connect(gn);
+    } else src.connect(gn);
+    gn.connect(sfxGain); src.start(t);
+  }
+
+  const SFX = {
+    jump:  () => tone(330, 0.16, "square", 0.22, 0, 760),
+    land:  () => tone(150, 0.07, "triangle", 0.16),
+    slide: () => noise(0.22, 0.10, 0, 1400),
+    coin:  () => { tone(880, 0.06, "square", 0.16); tone(1320, 0.09, "square", 0.14, ac && ac.currentTime + 0.05); },
+    power: () => tone(440, 0.28, "square", 0.20, 0, 1250),
+    crash: () => { tone(300, 0.45, "sawtooth", 0.26, 0, 50); noise(0.4, 0.22, 0, 900); },
+    click: () => tone(620, 0.05, "square", 0.16),
+    hover: () => tone(880, 0.03, "square", 0.08),
+    warn:  () => tone(240, 0.15, "triangle", 0.20),
+    fanfare: () => { [520,780,1040,1560].forEach((f,i)=>tone(f,0.22,"square",0.18, ac && ac.currentTime + i*0.09)); },
+    punch: () => { tone(180, 0.10, "square", 0.24, 0, 60); noise(0.14, 0.26, 0, 2600); },
+    smash: () => { noise(0.28, 0.30, 0, 3600); tone(120, 0.22, "sawtooth", 0.20, 0, 40); },
+    whiff: () => tone(200, 0.09, "sine", 0.10, 0, 120),
+    tick:  () => tone(1400, 0.02, "square", 0.07),
+    win:   () => { [660,880,1320].forEach((f,i)=>tone(f,0.3,"square",0.18, ac && ac.currentTime + i*0.12)); },
+    lose:  () => tone(300, 0.4, "triangle", 0.16, 0, 120),
+  };
+
+  /* Musik-Scheduler: plant Noten ein kleines Stueck im Voraus ein, damit
+     es keine Aussetzer gibt, wenn der Browser mal einen Frame verschluckt. */
+  function schedule() {
+    if (!ac || !curTrack || muted) return;
+    const tr = TRACKS[curTrack];
+    if (!tr) return;
+    const beat = 60 / tr.bpm / 2;
+    while (nextT < ac.currentTime + 0.25) {
+      const li = step % tr.lead.length, bi = step % tr.bass.length;
+      const [ln, lb] = tr.lead[li], [bn, bb] = tr.bass[bi];
+      const lf = freq(ln), bf = freq(bn);
+      if (lf) musicNote(lf, beat * lb * 0.92, "square", 0.16, nextT);
+      if (bf) musicNote(bf, beat * bb * 0.92, "triangle", 0.20, nextT);
+      if (step % 2 === 0) musicHat(nextT);
+      nextT += beat; step++;
+    }
+  }
+  function musicNote(f, dur, type, vol, t) {
+    const o = ac.createOscillator(), gn = ac.createGain();
+    o.type = type; o.frequency.setValueAtTime(f, t);
+    gn.gain.setValueAtTime(0, t);
+    gn.gain.linearRampToValueAtTime(vol, t + 0.01);
+    gn.gain.exponentialRampToValueAtTime(0.0008, t + dur);
+    o.connect(gn); gn.connect(musicGain); o.start(t); o.stop(t + dur + 0.02);
+  }
+  function musicHat(t) {
+    const n = Math.floor(ac.sampleRate * 0.028);
+    const b = ac.createBuffer(1, n, ac.sampleRate), d = b.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = (Math.random()*2-1) * Math.pow(1 - i/n, 3);
+    const s = ac.createBufferSource(); s.buffer = b;
+    const gn = ac.createGain(); gn.gain.value = 0.10;
+    s.connect(gn); gn.connect(musicGain); s.start(t);
+  }
+
+  return {
+    unlock, get started() { return started; },
+    play(name) { if (!ac || muted) return; const f = SFX[name]; if (f) try { f(); } catch (e) {} },
+    music(track) {
+      if (!ac) return;
+      if (curTrack === track) return;
+      curTrack = track; step = 0; nextT = ac.currentTime + 0.05;
+      if (htmlAudio) { htmlAudio.pause(); htmlAudio = null; }
+      const file = AUDIO_FILES[track];
+      if (file) {                       // eigene Musikdatei, falls hinterlegt
+        htmlAudio = new Audio(file); htmlAudio.loop = true; applyVol();
+        htmlAudio.play().catch(() => {});
+        if (timer) { clearInterval(timer); timer = null; }
+        return;
+      }
+      if (!timer) timer = setInterval(schedule, 60);
+    },
+    stopMusic() { curTrack = null; if (timer) { clearInterval(timer); timer = null; }
+                  if (htmlAudio) { htmlAudio.pause(); htmlAudio = null; } },
+    get muted() { return muted; },
+    setMuted(v) { muted = v; applyVol(); if (muted) this.stopMusic(); },
+    get musicVol() { return musicVol; }, set musicVol(v) { musicVol = v; applyVol(); },
+    get sfxVol() { return sfxVol; },   set sfxVol(v) { sfxVol = v; applyVol(); },
+    get track() { return curTrack; },
+  };
+})();
+
+/* ====================================================================== */
+/*  SPEICHERN - Fortschritt ueberlebt Browser und Geraet                   */
+/*  localStorage wirkt sofort, die db-Faehigkeit synchronisiert zusaetzlich*/
+/*  ueber Geraete hinweg. Fehlt eines von beiden, laeuft das Spiel weiter. */
+/* ====================================================================== */
+const Save = (() => {
+  const KEY = "neonrush.save.v1";
+  const DOC = "save/progress";
+  let db = null, dirty = false, saving = false;
+  const data = {
+    coins: 0, best: { endless: 0, blackout: 0 }, runs: 0,
+    skins: ["runner"], skin: "runner",
+    revives: 0, charges: {},          // vorab gewonnene Power-Ups
+    settings: { music: 0.5, sfx: 0.8, muted: false },
+  };
+  function merge(src) {
+    if (!src || typeof src !== "object") return;
+    if (typeof src.coins === "number") data.coins = Math.max(data.coins, src.coins | 0);
+    if (src.best) for (const k of ["endless", "blackout"])
+      if (typeof src.best[k] === "number") data.best[k] = Math.max(data.best[k], src.best[k] | 0);
+    if (typeof src.runs === "number") data.runs = Math.max(data.runs, src.runs | 0);
+    if (Array.isArray(src.skins)) for (const s of src.skins)
+      if (SKINS.some(k => k.id === s) && !data.skins.includes(s)) data.skins.push(s);
+    if (typeof src.skin === "string" && data.skins.includes(src.skin)) data.skin = src.skin;
+    if (typeof src.revives === "number") data.revives = Math.max(data.revives, src.revives | 0);
+    if (src.charges && typeof src.charges === "object")
+      for (const k in src.charges) if (typeof src.charges[k] === "number")
+        data.charges[k] = Math.max(data.charges[k] || 0, src.charges[k] | 0);
+    if (src.settings) Object.assign(data.settings, src.settings);
+  }
+  function readLocal() { try { merge(JSON.parse(localStorage.getItem(KEY) || "null")); } catch (e) {} }
+  function writeLocal() { try { localStorage.setItem(KEY, JSON.stringify(data)); } catch (e) {} }
+
+  async function connect() {
+    try {
+      db = await window.claude?.use?.("db");
+      if (!db) return;
+      const snap = await db.doc(DOC).get();
+      if (snap && snap.exists !== false) merge(snap.data ? snap.data() : snap);
+      writeLocal();
+      applySettings();
+      flush();
+    } catch (e) { db = null; }
+  }
+  async function flush() {
+    if (!db || saving || !dirty) return;
+    saving = true; dirty = false;
+    try { await db.doc(DOC).set(JSON.parse(JSON.stringify(data))); }
+    catch (e) {} finally { saving = false; }
+  }
+  function applySettings() {
+    Sound.musicVol = data.settings.music;
+    Sound.sfxVol = data.settings.sfx;
+    Sound.setMuted(!!data.settings.muted);
+  }
+  readLocal();
+  return {
+    data, connect, applySettings,
+    commit() { writeLocal(); dirty = true; flush(); },
+  };
+})();
+
+/* ====================================================================== */
+/*  WELT - Perspektive, Spielfigur, Objekte                               */
+/* ====================================================================== */
+const LANES = 3;
+const HORIZON = 92, GROUND = 214;
+const ROAD_FAR = 46, ROAD_NEAR = 330, ROAD_BEHIND = -7;
+const DEPTH_K = 0.105, MAX_DEPTH = 2.6, CENTER = VW >> 1;
+const SPAWN_Z = 78, DESPAWN_Z = -9, DRAW_Z_MIN = -1.5;
+const HIT_MIN = -0.6, HIT_MAX = 1.2;
+const SPRITE_NEAR = 2.0;
+
+const JUMP_V = 6.25, GRAV = 0.39, SLIDE_FRAMES = 32;
+const HEAD_STAND = 40, HEAD_SLIDE = 14;
+const LOWBAR_H = 26, COIN_H = 14, PICK_H = 16, REACH = 24;
+
+/* Punch: kurze aktive Phase, danach Abklingzeit. Dadurch ist der Schlag
+   eine Entscheidung und kein Dauerzustand. */
+const PUNCH_ACTIVE = 13;
+const PUNCH_COOLDOWN = 70;
+const PUNCH_REACH_Z = 16;
+
+const BASE_SPEED = 0.55, SPEED_RAMP = 0.000075;   // bewusst OHNE Obergrenze
+const BATTERY_MAX = 100, BATTERY_DRAIN = 0.13, BATTERY_COIN = 13, BLIND_FRAMES = 180;
+const LIGHT_FULL = 150, LIGHT_EMPTY = 30, LIGHT_AHEAD = 32;
+
+function depth(z) { return Math.min(MAX_DEPTH, 1 / Math.max(0.05, 1 + z * DEPTH_K)); }
+function project(z, lane, height) {
+  const d = depth(z);
+  const y = HORIZON + (GROUND - HORIZON) * d - (height || 0) * d;
+  const rw = ROAD_FAR + (ROAD_NEAR - ROAD_FAR) * d;
+  return { x: CENTER + (lane || 0) * rw * 0.33, y, d, rw };
+}
+
+/* --- Objekt-Typen. `punchable` trennt zerschlagbar von unantastbar. --- */
+const KIND = {
+  barrier: { spr:"barrier", scale:1.15, depth:1.4, h:0,        punchable:false, act:"jump",
+             blocks: p => p.height < 20 },
+  lowbar:  { spr:"lowbar",  scale:1.15, depth:1.4, h:LOWBAR_H, punchable:false, act:"slide",
+             blocks: p => p.head >= LOWBAR_H },
+  train:   { spr:"train",   scale:1.55, depth:9.0, h:0,        punchable:false, act:"dodge",
+             blocks: () => true },
+  crate:   { spr:"crate",   scale:1.7,  depth:1.6, h:0,        punchable:true,  act:"punch",
+             blocks: () => true, reward:{ coins:3, score:60 } },
+  drone:   { spr:"drone",   scale:1.9,  depth:1.6, h:22,       punchable:true,  act:"punch",
+             blocks: p => p.head >= 16 && p.height < 44, reward:{ coins:1, score:120 } },
+};
+
+const POWERS = {
+  magnet: { name:"MAGNET",        color:C.magenta, dur:480 },
+  shield: { name:"SCHILD",        color:C.lime,    dur:0 },
+  double: { name:"DOPPELTE COINS",color:C.amber,   dur:480 },
+  slowmo: { name:"ZEITLUPE",      color:C.violet,  dur:300 },
+  boost:  { name:"BOOST",         color:C.cyan,    dur:240 },
+};
+const POWER_IDS = Object.keys(POWERS);
+
+/* --- Muster. Jedes laesst per Konstruktion eine Spur passierbar. --- */
+const PATTERNS = [
+  ["j1",  [[0,"barrier"]],                         0],
+  ["s1",  [[0,"lowbar"]],                          0],
+  ["c1",  [[0,"crate"]],                          60],
+  ["t1",  [[0,"train"]],                         140],
+  ["d1",  [[0,"drone"]],                         240],
+  ["j2",  [[-1,"barrier"],[1,"barrier"]],        320],
+  ["mix", [[-1,"lowbar"],[1,"barrier"]],         420],
+  ["cc",  [[-1,"crate"],[1,"crate"]],            500],
+  ["tw",  [[-1,"train"],[1,"train"]],            620],
+  ["sp",  [[-1,"lowbar"],[0,"lowbar"]],          700],
+  ["jp",  [[0,"barrier"],[1,"barrier"]],         780],
+  ["cd",  [[-1,"crate"],[0,"drone"]],            900],
+  ["td",  [[-1,"train"],[1,"drone"]],           1100],
+];
+
+class Obj {
+  constructor(z, lane, kind) {
+    this.z = z; this.lane = lane; this.kind = kind;
+    this.def = KIND[kind]; this.alive = true; this.smashed = 0;
+    this.h = this.def.h;
+  }
+  get depth() { return this.def.depth; }
+  advance(sp) { this.z -= sp; if (this.z < DESPAWN_Z) this.alive = false; }
+  inHit() { return this.z <= HIT_MAX && this.z + this.def.depth >= HIT_MIN; }
+  draw() {
+    const p = project(this.z, this.lane - 1, this.h);
+    const sp = SPR[this.def.spr];
+    if (this.smashed > 0) {
+      g.save(); g.globalAlpha = Math.max(0, 1 - this.smashed / 12);
+      drawSprite(sp, p.x, p.y, this.def.scale * p.d * 2.6 * (1 + this.smashed * 0.09));
+      g.restore(); return;
+    }
+    // Zerschlagbares bekommt einen Leuchtrand - so ist sofort klar,
+    // worauf der Schlag wirkt und worauf nicht.
+    if (this.def.punchable) {
+      const s = drawSprite(sp, p.x, p.y, this.def.scale * p.d * 2.6);
+      if (s.w > 6) {
+        g.strokeStyle = C.lime; g.globalAlpha = 0.5; g.lineWidth = 1;
+        g.strokeRect(Math.round(p.x - s.w/2) - 1.5, Math.round(p.y - s.h) - 1.5, s.w + 3, s.h + 3);
+        g.globalAlpha = 1;
+      }
+    } else drawSprite(sp, p.x, p.y, this.def.scale * p.d * 2.6);
+  }
+}
+class Pick {
+  constructor(z, lane, type) {
+    this.z = z; this.lane = lane; this.type = type;   // "coin" oder Power-Id
+    this.alive = true; this.spin = Math.random() * 6.28;
+    this.h = type === "coin" ? COIN_H : PICK_H;
+    this.depth = type === "coin" ? 2.4 : 2.6;
+  }
+  advance(sp) { this.z -= sp; this.spin += 0.2; if (this.z < DESPAWN_Z) this.alive = false; }
+  inHit() { return this.z <= HIT_MAX && this.z + this.depth >= HIT_MIN; }
+  attract(lane) { this.lane += (lane - this.lane) * 0.22; }
+  draw() {
+    if (this.type === "coin") {
+      const p = project(this.z, this.lane - 1, this.h);
+      const sq = Math.abs(Math.cos(this.spin)) * 0.75 + 0.25;
+      const w = Math.max(1, Math.round(8 * 0.9 * p.d * 2.6 * sq));
+      const h = Math.max(1, Math.round(8 * 0.9 * p.d * 2.6));
+      g.drawImage(SPR.coin, Math.round(p.x - w/2), Math.round(p.y - h), w, h);
+    } else {
+      const bob = this.h + Math.sin(this.spin * 0.55) * 3.2;
+      const p = project(this.z, this.lane - 1, bob);
+      const s = drawSprite(SPR[this.type], p.x, p.y, 1.1 * p.d * 2.6);
+      const r = s.w * 0.95;
+      if (r > 2) {
+        g.strokeStyle = POWERS[this.type].color; g.globalAlpha = 0.45;
+        g.beginPath(); g.arc(Math.round(p.x), Math.round(p.y - s.h/2), r, 0, 6.2832); g.stroke();
+        g.globalAlpha = 1;
+      }
+    }
+  }
+}
+
+class Player {
+  constructor() { this.reset(); }
+  reset() {
+    this.lane = 1; this.vlane = 1; this.state = "run";
+    this.height = 0; this.vy = 0; this.slide = 0; this.anim = 0;
+    this.crashT = 0; this.shield = false; this.inv = 0;
+    this.punchT = 0; this.cool = 0; this.combo = 0; this.comboT = 0;
+  }
+  get head() { return this.state === "slide" ? HEAD_SLIDE : this.height + HEAD_STAND; }
+  get off() { return this.vlane - 1; }
+  move(d) {
+    if (this.state === "crash") return false;
+    const t = this.lane + d;
+    if (t < 0 || t >= LANES) return false;
+    this.lane = t; return true;
+  }
+  jump() { if (this.state === "run") { this.state = "jump"; this.vy = JUMP_V; return true; } return false; }
+  duck() {
+    if (this.state === "run") { this.state = "slide"; this.slide = SLIDE_FRAMES; return true; }
+    if (this.state === "jump") { this.vy = -JUMP_V; return true; }   // Schnellabstieg
+    return false;
+  }
+  punch() {
+    if (this.state === "crash" || this.cool > 0) return false;
+    this.punchT = PUNCH_ACTIVE; this.cool = PUNCH_COOLDOWN; return true;
+  }
+  get punching() { return this.punchT > 0; }
+  hurt() {
+    if (this.inv > 0) return false;
+    if (this.shield) { this.shield = false; this.inv = 70; return false; }
+    this.state = "crash"; this.crashT = 0; return true;
+  }
+  update(sp) {
+    if (this.inv > 0) this.inv--;
+    if (this.cool > 0) this.cool--;
+    if (this.punchT > 0) this.punchT--;
+    if (this.comboT > 0) { this.comboT--; if (this.comboT === 0) this.combo = 0; }
+    if (this.state === "crash") { this.crashT++; this.height = Math.max(0, this.height - 0.4); return null; }
+    const diff = this.lane - this.vlane;
+    this.vlane = Math.abs(diff) < 0.02 ? this.lane : this.vlane + diff * 0.31;
+    if (this.state === "jump") {
+      this.height += this.vy; this.vy -= GRAV;
+      if (this.height <= 0) { this.height = 0; this.vy = 0; this.state = "run"; return "land"; }
+    } else if (this.state === "slide") {
+      if (--this.slide <= 0) this.state = "run";
+    }
+    this.anim = (this.anim + 0.22 * (sp / BASE_SPEED)) % 4;
+    return null;
+  }
+  sprite(skin) {
+    const s = SPR.skins[skin] || SPR.skins.runner;
+    if (this.state === "crash") return s.crash;
+    if (this.punching && this.state === "run") return s.punch;
+    if (this.state === "jump") return s.jump;
+    if (this.state === "slide") return s.slide;
+    return s.run[Math.floor(this.anim) % 4];
+  }
+  draw(skin) {
+    const p = project(0, this.off, this.height);
+    const gp = project(0, this.off, 0);
+    const sp = this.sprite(skin);
+    const sc = SPRITE_NEAR * p.d;
+    const sw = sp.width * sc;
+    // Schatten verraet die Spur auch waehrend des Sprungs
+    const shw = Math.max(3, sw * 0.7 * (1 - Math.min(0.55, this.height * 0.009)));
+    g.fillStyle = "rgba(0,0,0,0.45)";
+    g.fillRect(Math.round(gp.x - shw/2), Math.round(gp.y - 2), Math.round(shw), 4);
+    g.save();
+    if (this.inv > 0 && ((this.inv >> 2) & 1) === 0) g.globalAlpha = 0.45;
+    const s = drawSprite(sp, p.x, p.y, sc);
+    g.restore();
+    if (this.shield) {
+      g.strokeStyle = C.lime; g.globalAlpha = 0.55; g.lineWidth = 1;
+      g.beginPath(); g.arc(Math.round(p.x), Math.round(p.y - s.h/2), s.w * 0.85, 0, 6.2832); g.stroke();
+      g.globalAlpha = 1;
+    }
+    // Schlagwelle waehrend der aktiven Punch-Phase
+    if (this.punching) {
+      const t = 1 - this.punchT / PUNCH_ACTIVE;
+      g.strokeStyle = C.cyan; g.globalAlpha = 0.8 * (1 - t); g.lineWidth = 2;
+      g.beginPath(); g.arc(Math.round(p.x), Math.round(p.y - s.h * 0.55), 6 + t * 26, -0.9, 0.9); g.stroke();
+      g.globalAlpha = 1;
+    }
+  }
+}
+
+/* --- Nachschub-Generator --- */
+class Generator {
+  constructor(blackout) {
+    this.r = Math.random; this.blackout = blackout;
+    this.next = 46; this.sincePower = 0;
+  }
+  /* Der Abstand waechst MIT dem Tempo. Nur so bleibt die Reaktionszeit
+     konstant, obwohl die Geschwindigkeit nach oben offen ist. */
+  gapFrames(dist) { return Math.max(46, 82 - Math.min(34, dist / 320)); }
+  spawn(dist, speed, objs, picks) {
+    this.next -= 1;
+    if (this.next > 0) return;
+    const z = SPAWN_Z;
+    const avail = PATTERNS.filter(p => dist >= p[2]);
+    const [, slots] = avail[Math.floor(Math.random() * avail.length)];
+    const base = slots.some(s => s[0] !== 0) ? 1 : Math.floor(Math.random() * LANES);
+    const used = new Set();
+    for (const [rel, kind] of slots) {
+      const lane = base + rel;
+      if (lane < 0 || lane >= LANES) continue;
+      used.add(lane); objs.push(new Obj(z, lane, kind));
+    }
+    let free = [];
+    for (let l = 0; l < LANES; l++) if (!used.has(l)) free.push(l);
+    if (!free.length) {                                   // Sicherheitsnetz
+      const fb = Math.floor(Math.random() * LANES);
+      for (let i = objs.length - 1; i >= 0; i--)
+        if (objs[i].z === z && objs[i].lane === fb) objs.splice(i, 1);
+      free = [fb];
+    }
+    const targets = this.blackout ? free : [free[Math.floor(Math.random() * free.length)]];
+    const chance = this.blackout ? 0.96 : 0.74;
+    for (const lane of targets) {
+      if (Math.random() >= chance) continue;
+      const n = 3 + Math.floor(Math.random() * (this.blackout ? 5 : 4));
+      for (let i = 0; i < n; i++) picks.push(new Pick(z + 6 + i * 3.4, lane, "coin"));
+    }
+    this.sincePower++;
+    if (this.sincePower >= 4 && Math.random() < 0.38) {
+      this.sincePower = 0;
+      const id = POWER_IDS[Math.floor(Math.random() * POWER_IDS.length)];
+      picks.push(new Pick(z + 14, free[Math.floor(Math.random() * free.length)], id));
+    }
+    this.next = this.gapFrames(dist);
+  }
+}
+
+/* ====================================================================== */
+/*  EINGABE - Tastatur, Maus und Touch                                     */
+/* ====================================================================== */
+const Input = (() => {
+  const pressed = {};
+  let pointer = { x: -99, y: -99, down: false };
+  const queue = [];                       // Aktionen: left,right,up,down,punch,pause,confirm,back
+  let tStart = null;
+
+  function push(a) { queue.push(a); }
+  function toVirt(cx, cy) {
+    const r = cvs.getBoundingClientRect();
+    return { x: (cx - r.left) / viewScale, y: (cy - r.top) / viewScale };
+  }
+  const KEYMAP = {
+    ArrowLeft:"left", KeyA:"left", ArrowRight:"right", KeyD:"right",
+    ArrowUp:"up", KeyW:"up", Space:"up", ArrowDown:"down", KeyS:"down",
+    KeyX:"punch", KeyP:"pause", Escape:"back", Enter:"confirm",
+    NumpadEnter:"confirm", Backspace:"back", KeyM:"mute", KeyF:"full",
+  };
+  window.addEventListener("keydown", e => {
+    const a = KEYMAP[e.code];
+    if (!a) return;
+    if (["Space","ArrowUp","ArrowDown","ArrowLeft","ArrowRight"].includes(e.code)) e.preventDefault();
+    Sound.unlock();
+    if (!pressed[e.code]) push(a);
+    pressed[e.code] = true;
+  });
+  window.addEventListener("keyup", e => { delete pressed[e.code]; });
+
+  cvs.addEventListener("pointerdown", e => {
+    Sound.unlock();
+    const v = toVirt(e.clientX, e.clientY);
+    pointer = { x: v.x, y: v.y, down: true };
+    tStart = { x: v.x, y: v.y, t: performance.now(), moved: false };
+    push({ type:"down", x:v.x, y:v.y });
+    cvs.setPointerCapture?.(e.pointerId);
+  });
+  cvs.addEventListener("pointermove", e => {
+    const v = toVirt(e.clientX, e.clientY);
+    pointer.x = v.x; pointer.y = v.y;
+    if (!tStart || !pointer.down) return;
+    const dx = v.x - tStart.x, dy = v.y - tStart.y;
+    if (tStart.moved) return;
+    const TH = 16;                       // Mindestweg fuer eine Wischgeste
+    if (Math.abs(dx) > TH || Math.abs(dy) > TH) {
+      tStart.moved = true;
+      if (Math.abs(dx) > Math.abs(dy)) push(dx > 0 ? "right" : "left");
+      else push(dy > 0 ? "down" : "up");
+    }
+  });
+  function endPointer(e) {
+    const v = tStart ? { x: tStart.x, y: tStart.y } : pointer;
+    if (tStart && !tStart.moved) push({ type:"tap", x:v.x, y:v.y });
+    pointer.down = false; tStart = null;
+  }
+  cvs.addEventListener("pointerup", endPointer);
+  cvs.addEventListener("pointercancel", endPointer);
+
+  return {
+    take() { const q = queue.slice(); queue.length = 0; return q; },
+    get pointer() { return pointer; },
+    held(a) { return Object.keys(pressed).some(k => KEYMAP[k] === a); },
+  };
+})();
+
+/* ====================================================================== */
+/*  UI-BAUSTEINE                                                          */
+/* ====================================================================== */
+function panel(x, y, w, h, fill, border, alpha, corner) {
+  corner = corner === undefined ? 3 : corner;
+  x = Math.round(x); y = Math.round(y); w = Math.round(w); h = Math.round(h);
+  g.save(); g.globalAlpha = alpha === undefined ? 0.92 : alpha;
+  g.fillStyle = fill || C.dark;
+  g.beginPath();
+  g.moveTo(x + corner, y); g.lineTo(x + w - corner, y); g.lineTo(x + w, y + corner);
+  g.lineTo(x + w, y + h - corner); g.lineTo(x + w - corner, y + h);
+  g.lineTo(x + corner, y + h); g.lineTo(x, y + h - corner); g.lineTo(x, y + corner);
+  g.closePath(); g.fill();
+  g.restore();
+  if (border) {
+    g.save(); g.strokeStyle = border; g.lineWidth = 1;
+    g.beginPath();
+    g.moveTo(x + corner + .5, y + .5); g.lineTo(x + w - corner - .5, y + .5);
+    g.lineTo(x + w - .5, y + corner + .5); g.lineTo(x + w - .5, y + h - corner - .5);
+    g.lineTo(x + w - corner - .5, y + h - .5); g.lineTo(x + corner + .5, y + h - .5);
+    g.lineTo(x + .5, y + h - corner - .5); g.lineTo(x + .5, y + corner + .5);
+    g.closePath(); g.stroke(); g.restore();
+  }
+}
+
+class Button {
+  constructor(x, y, w, h, label, action, color, scale, hint) {
+    Object.assign(this, { x, y, w, h, label, action, color: color || C.cyan,
+                          scale: scale || 2, hint, enabled: true, hover: false });
+  }
+  get rect() { return { x:this.x, y:this.y, w:this.w, h:this.h }; }
+  hit(px, py) { return this.enabled && px >= this.x && px <= this.x + this.w
+                    && py >= this.y && py <= this.y + this.h; }
+  draw(t) {
+    const on = this.hover && this.enabled;
+    const bd = this.enabled ? this.color : C.grey;
+    const fill = on ? "#221a42" : C.dark;
+    const x = this.x + (on ? 2 : 0);
+    panel(x, this.y, this.w, this.h, fill, bd, 0.9);
+    if (on) {
+      g.fillStyle = this.color;
+      g.fillRect(x + 2, this.y + 3, 2 + Math.round(Math.sin(t * 0.14) * 1.2), this.h - 6);
+    }
+    const ty = this.hint ? this.y + 5 : Math.round(this.y + this.h/2 - GH*this.scale/2);
+    text(this.label, x + this.w/2, ty, this.scale,
+         this.enabled ? (on ? C.white : C.light) : C.grey, "center", on ? this.color : null);
+    if (this.hint) text(this.hint, x + this.w/2, this.y + this.h - 11, 1, C.grey, "center");
+  }
+}
+
+/* Pop-up: haelt die Szene darunter an, solange es offen ist. */
+class Popup {
+  constructor(title, lines, buttons, color, width, onCancel) {
+    this.title = title; this.lines = lines; this.color = color || C.cyan;
+    this.onCancel = onCancel; this.sel = 0; this.anim = 0;
+    const w = width || 236;
+    const h = 34 + lines.length * 11 + buttons.length * 22 + 10;
+    this.x = (VW - w) >> 1; this.y = (VH - h) >> 1; this.w = w; this.h = h;
+    this.buttons = buttons.map((b, i) =>
+      new Button(this.x + 16, this.y + 28 + lines.length * 11 + i * 22, w - 32, 18, b[0], b[1], b[2], 1));
+    if (this.buttons[0]) this.buttons[0].hover = true;
+  }
+  move(d) {
+    if (!this.buttons.length) return;
+    this.sel = (this.sel + d + this.buttons.length) % this.buttons.length;
+    this.buttons.forEach((b, i) => b.hover = i === this.sel);
+    Sound.play("hover");
+  }
+  activate() { return this.buttons[this.sel]?.action; }
+  hitTest(x, y) { for (const b of this.buttons) if (b.hit(x, y)) return b.action; return null; }
+  hover(x, y) { this.buttons.forEach((b, i) => { if (b.hit(x, y)) { b.hover = true; this.sel = i; }
+                                                 else b.hover = false; }); }
+  draw(t) {
+    this.anim = Math.min(1, this.anim + 0.2);
+    g.save(); g.globalAlpha = 0.68 * this.anim; g.fillStyle = "#000";
+    g.fillRect(0, 0, VW, VH); g.restore();
+    const h = Math.max(4, Math.round(this.h * this.anim));
+    const y = Math.round(this.y + (this.h - h) / 2);
+    panel(this.x, y, this.w, h, C.dark, this.color, 0.96);
+    if (this.anim < 0.85) return;
+    text(this.title, this.x + this.w/2, this.y + 10, 2, this.color, "center", this.color);
+    this.lines.forEach((l, i) =>
+      text(l, this.x + this.w/2, this.y + 28 + i * 11, 1, C.light, "center"));
+    this.buttons.forEach(b => b.draw(t));
+  }
+}
+
+class Toast {
+  constructor(msg, color) { this.msg = msg; this.color = color || C.violet; this.age = 0; }
+  get alive() { return this.age < 100; }
+  draw(slot) {
+    const p = this.age / 100;
+    const off = p < 0.15 ? (1 - p/0.15) * -24 : p > 0.85 ? (p - 0.85)/0.15 * -24 : 0;
+    const w = textW(this.msg, 1) + 20;
+    const x = (VW - w) >> 1, y = 40 + slot * 20 + off;
+    panel(x, y, w, 16, C.dark, this.color, 0.88, 2);
+    text(this.msg, VW/2, y + 5, 1, this.color, "center");
+  }
+}
+
+/* ====================================================================== */
+/*  SPIELZUSTAND                                                          */
+/* ====================================================================== */
+const App = {
+  scene: null, popup: null, toasts: [], frame: 0,
+  run: null, lastResult: null, pendingHighlight: null,
+  go(name, opts) {
+    this.popup = null; this.toasts.length = 0;
+    this.scene = SCENES[name];
+    this.scene.enter?.(opts || {});
+    if (this.scene.music) Sound.music(this.scene.music);
+  },
+  toast(msg, color) { this.toasts.push(new Toast(msg, color)); if (this.toasts.length > 3) this.toasts.shift(); },
+  openPopup(p) { this.popup = p; Sound.play("click"); },
+  closePopup() { this.popup = null; },
+};
+
+function bgLayers(scroll, gameplay) {
+  g.fillStyle = C.deep; g.fillRect(0, 0, VW, VH);
+  const sky = g.createLinearGradient(0, 0, 0, HORIZON + 20);
+  sky.addColorStop(0, C.deep); sky.addColorStop(1, "#2c1848");
+  g.fillStyle = sky; g.fillRect(0, 0, VW, HORIZON + 20);
+  const layers = gameplay
+    ? [[BG.stars, 0.04, 0], [BG.farG, 0.13, HORIZON - 46], [BG.nearG, 0.30, HORIZON - 30]]
+    : [[BG.stars, 0.05, 0], [BG.far, 0.16, 96], [BG.near, 0.34, 132]];
+  for (const [img, f, y] of layers) {
+    const off = Math.floor(scroll * f) % VW;
+    g.drawImage(img, -off, y);
+  }
+}
+/* Menue-Hintergrund bekommt einen Schleier: die Skyline ist detailreich
+   und wuerde Text sonst schwer lesbar machen. */
+function menuBackground(scroll) {
+  bgLayers(scroll, false);
+  const gy = 174;
+  g.fillStyle = C.near; g.fillRect(0, gy, VW, VH - gy);
+  g.fillStyle = C.violet; g.fillRect(0, gy - 1, VW, 1);
+  g.strokeStyle = C.line; g.lineWidth = 1; g.beginPath();
+  for (let i = -1; i < 14; i++) {
+    const x = ((i * 40 - scroll * 1.6) % (VW + 40) + VW + 40) % (VW + 40) - 20;
+    g.moveTo(x, VH); g.lineTo(x + 26, gy);
+  }
+  g.stroke();
+  g.save(); g.globalAlpha = 0.47; g.fillStyle = "#080514";
+  g.fillRect(0, 0, VW, VH); g.restore();
+}
+function vignette(strength) {
+  const r = g.createRadialGradient(VW/2, VH/2, VH*0.28, VW/2, VH/2, VH*0.78);
+  r.addColorStop(0, "rgba(0,0,0,0)");
+  r.addColorStop(1, `rgba(0,0,0,${strength || 0.55})`);
+  g.fillStyle = r; g.fillRect(0, 0, VW, VH);
+}
+function title(t, y, sub) {
+  const bob = Math.sin(App.frame * 0.03) * 1.5;
+  text(t, VW/2, y + bob, 4, C.white, "center", C.magenta);
+  if (sub) text(sub, VW/2, y + 34 + bob, 1, C.cyan, "center");
+}
+function footer(t) { text(t, VW/2, VH - 12, 1, C.grey, "center"); }
+
+/* Gemeinsame Menue-Navigation. */
+function menuInput(scene, actions) {
+  const p = Input.pointer;
+  scene.buttons.forEach((b, i) => {
+    const h = b.hit(p.x, p.y);
+    if (h && !b.hover) { scene.sel = i; Sound.play("hover"); }
+    b.hover = h;
+  });
+  if (scene.buttons.every(b => !b.hover) && scene.buttons[scene.sel])
+    scene.buttons[scene.sel].hover = true;
+  for (const a of actions) {
+    if (typeof a === "object") {
+      if (a.type === "tap" || a.type === "down") {
+        for (const b of scene.buttons) if (b.hit(a.x, a.y)) {
+          if (a.type === "tap") { Sound.play("click"); scene.act(b.action); }
+          return;
+        }
+      }
+      continue;
+    }
+    if (a === "up" || a === "left") moveSel(scene, -1);
+    else if (a === "down" || a === "right") moveSel(scene, 1);
+    else if (a === "confirm") { const b = scene.buttons[scene.sel];
+                                if (b?.enabled) { Sound.play("click"); scene.act(b.action); } }
+    else if (a === "back" && scene.backAction) { Sound.play("click"); scene.act(scene.backAction); }
+    else if (a === "mute") toggleMute();
+    else if (a === "full") toggleFullscreen();
+  }
+}
+function moveSel(scene, d) {
+  const usable = scene.buttons.map((b, i) => b.enabled ? i : -1).filter(i => i >= 0);
+  if (!usable.length) return;
+  let pos = usable.indexOf(scene.sel);
+  if (pos < 0) pos = 0; else pos = (pos + d + usable.length) % usable.length;
+  scene.sel = usable[pos];
+  scene.buttons.forEach((b, i) => b.hover = i === scene.sel);
+  Sound.play("hover");
+}
+function toggleMute() {
+  Sound.setMuted(!Sound.muted);
+  Save.data.settings.muted = Sound.muted; Save.commit();
+  App.toast(Sound.muted ? "TON AUS" : "TON AN", C.amber);
+  if (!Sound.muted && App.scene?.music) { Sound.stopMusic(); Sound.music(App.scene.music); }
+}
+function toggleFullscreen() {
+  const el = document.documentElement;
+  if (!document.fullscreenElement) el.requestFullscreen?.().catch(() => {});
+  else document.exitFullscreen?.().catch(() => {});
+}
+function coinPill(x, y) {
+  const label = String(Save.data.coins);
+  const w = textW(label, 1) + 22;
+  panel(x, y, w, 15, C.dark, C.amber, 0.9, 2);
+  g.drawImage(SPR.coin, x + 4, y + 4, 7, 7);
+  text(label, x + 15, y + 4, 1, C.amber);
+  return { x, y, w, h: 15 };
+}
+
+/* ====================================================================== */
+/*  SZENEN                                                                */
+/* ====================================================================== */
+const SCENES = {};
+
+/* ------------------------------------------------------------ Startscreen */
+SCENES.menu = {
+  music: "menu", sel: 0, scroll: 0, backAction: null,
+  buttons: [
+    new Button(VW/2 - 86, 116, 172, 22, "SPIELEN", "play", C.lime, 2),
+    new Button(VW/2 - 86, 143, 172, 22, "GLUECKSRAD", "wheel", C.amber, 2),
+    new Button(VW/2 - 86, 170, 172, 22, "ANLEITUNG", "howto", C.cyan, 2),
+    new Button(VW/2 - 86, 197, 172, 22, "MUSIK UND TON", "audio", C.violet, 2),
+  ],
+  enter() { this.sel = 0; this.buttons.forEach((b, i) => b.hover = i === 0); },
+  act(a) {
+    if (a === "play") App.go("modes");
+    else if (a === "wheel") App.go("wheel");
+    else if (a === "howto") App.go("howto");
+    else if (a === "audio") App.go("audio");
+  },
+  update(actions) {
+    this.scroll += 0.35;
+    menuInput(this, actions);
+  },
+  draw() {
+    menuBackground(this.scroll);
+    // Eine kleine laufende Figur zieht ueber den Hintergrund.
+    const rx = ((this.scroll * 1.1) % (VW + 60)) - 30;
+    drawSprite(SPR.skins[Save.data.skin].run[Math.floor(App.frame * 0.18) % 4], rx, 196, 1.6);
+    title("NEON RUSH", 26, "EIN PIXEL ENDLESS RUNNER");
+    const pulse = Math.floor(60 + Math.sin(this.scroll * 0.06) * 30);
+    g.fillStyle = `rgb(${pulse},30,${pulse + 40})`; g.fillRect(VW/2 - 60, 74, 120, 1);
+    const best = Math.max(Save.data.best.endless, Save.data.best.blackout);
+    text("HIGHSCORE: " + best, VW/2, 86, 1, C.amber, "center");
+    text("SKIN: " + (SKINS.find(s => s.id === Save.data.skin)?.name || "-"),
+         VW/2, 98, 1, C.grey, "center");
+    coinPill(8, 8);
+    this.buttons.forEach(b => b.draw(App.frame));
+    text(Sound.muted ? "TON: AUS" : "TON: AN", 8, VH - 24, 1, Sound.muted ? C.magenta : C.lime);
+    text("M STUMM   F VOLLBILD", VW - 8, VH - 24, 1, C.grey, "right");
+    footer("PFEILE ODER TIPPEN   ENTER BESTAETIGT");
+    vignette(0.5);
+  },
+};
+
+/* --------------------------------------------------------- Modusauswahl */
+const MODE_INFO = {
+  endless: { label:"ENDLESS RUN", color:C.cyan, tag:"DER KLASSIKER",
+    lines:["Laufe so weit du kannst.","Ein Treffer beendet den Lauf.","Coins bringen Extrapunkte."],
+    rule:"STRECKE + COINS X 10" },
+  blackout: { label:"BLACKOUT", color:C.violet, tag:"DIE HERAUSFORDERUNG",
+    lines:["Die Strecke liegt im Dunkeln.","Dein Licht haengt am Akku.","Coins laden ihn wieder auf."],
+    rule:"AKKU LEER = 3 SEK BIS AUS" },
+};
+SCENES.modes = {
+  music: "menu", sel: 0, scroll: 0, backAction: "menu",
+  buttons: [
+    new Button(22, 202, 206, 22, "ENDLESS RUN", "endless", C.cyan, 2),
+    new Button(252, 202, 206, 22, "BLACKOUT", "blackout", C.violet, 2),
+    new Button(VW/2 - 60, 230, 120, 18, "ZURUECK", "menu", C.grey, 1),
+  ],
+  enter() { this.sel = 0; this.buttons.forEach((b, i) => b.hover = i === 0); },
+  act(a) {
+    if (a === "menu") App.go("menu");
+    else App.go("play", { mode: a });
+  },
+  update(actions) { this.scroll += 0.35; menuInput(this, actions); },
+  card(x, y, w, h, mode, on) {
+    const info = MODE_INFO[mode];
+    panel(x, y, w, h, C.dark, on ? info.color : C.grey, 0.9);
+    if (on) { g.strokeStyle = info.color; g.globalAlpha = 0.5;
+              g.strokeRect(x - 2.5, y - 2.5, w + 5, h + 5); g.globalAlpha = 1; }
+    text(info.label, x + w/2, y + 8, 2, info.color, "center", on ? info.color : null);
+    text(info.tag, x + w/2, y + 24, 1, C.grey, "center");
+    const pv = { x: x + 14, y: y + 38, w: w - 28, h: 40 };
+    g.fillStyle = C.track; g.fillRect(pv.x, pv.y, pv.w, pv.h);
+    g.strokeStyle = C.line; g.strokeRect(pv.x + .5, pv.y + .5, pv.w - 1, pv.h - 1);
+    for (let i = 0; i < 2; i++) {
+      g.fillStyle = C.rail;
+      g.fillRect(pv.x + (pv.w / 3) * (i + 1), pv.y + 2, 1, pv.h - 4);
+    }
+    const run = SPR.skins[Save.data.skin].run[1];
+    if (mode === "blackout") {
+      g.save(); g.beginPath(); g.rect(pv.x, pv.y, pv.w, pv.h); g.clip();
+      drawSprite(run, pv.x + pv.w/2, pv.y + pv.h - 6, 1.3);
+      const rad = g.createRadialGradient(pv.x + pv.w/2, pv.y + pv.h - 14, 4,
+                                         pv.x + pv.w/2, pv.y + pv.h - 14, 30);
+      rad.addColorStop(0, "rgba(0,0,0,0)"); rad.addColorStop(1, "rgba(0,0,0,0.94)");
+      g.fillStyle = rad; g.fillRect(pv.x, pv.y, pv.w, pv.h);
+      g.restore();
+    } else {
+      drawSprite(run, pv.x + pv.w/2, pv.y + pv.h - 6, 1.3);
+      drawSprite(SPR.barrier, pv.x + 24, pv.y + 22, 0.9);
+      drawSprite(SPR.coin, pv.x + pv.w - 22, pv.y + 20, 1.1);
+    }
+    info.lines.forEach((l, i) => text(l, x + w/2, y + 84 + i * 11, 1, C.light, "center"));
+    g.fillStyle = C.near; g.fillRect(x + 14, y + h - 30, w - 28, 1);
+    text(info.rule, x + w/2, y + h - 26, 1, info.color, "center");
+    const b = Save.data.best[mode];
+    text("REKORD: " + b, x + w/2, y + h - 13, 1, b ? C.amber : C.grey, "center");
+  },
+  draw() {
+    menuBackground(this.scroll);
+    title("MODUS WAEHLEN", 12);
+    this.card(22, 46, 206, 150, "endless", this.sel === 0);
+    this.card(252, 46, 206, 150, "blackout", this.sel === 1);
+    this.buttons.forEach(b => b.draw(App.frame));
+    footer("WAEHLEN UND BESTAETIGEN");
+    vignette(0.5);
+  },
+};
+
+/* ------------------------------------------------------------- Anleitung */
+SCENES.howto = {
+  music: "menu", sel: 2, scroll: 0, page: 0, backAction: "menu",
+  pages: ["STEUERUNG", "AUF DER STRECKE", "MODI UND PUNKTE"],
+  buttons: [
+    new Button(30, 232, 96, 20, "< ZURUECK", "prev", C.cyan, 1),
+    new Button(VW/2 - 48, 232, 96, 20, "HAUPTMENUE", "menu", C.grey, 1),
+    new Button(VW - 126, 232, 96, 20, "WEITER >", "next", C.cyan, 1),
+  ],
+  enter() { this.page = 0; this.sel = 2; this.sync(); },
+  sync() {
+    this.buttons[0].enabled = this.page > 0;
+    this.buttons[2].enabled = this.page < this.pages.length - 1;
+  },
+  act(a) {
+    if (a === "menu") { App.go("menu"); return; }
+    if (a === "prev" && this.page > 0) { this.page--; Sound.play("click"); }
+    if (a === "next" && this.page < this.pages.length - 1) { this.page++; Sound.play("click"); }
+    this.sync();
+  },
+  update(actions) {
+    this.scroll += 0.35;
+    const rest = [];
+    for (const a of actions) {
+      if (a === "left") this.act("prev");
+      else if (a === "right") this.act("next");
+      else rest.push(a);
+    }
+    menuInput(this, rest);
+  },
+  cap(x, y, label, color) {
+    const w = Math.max(16, textW(label, 1) + 8);
+    panel(x, y, w, 13, C.near, color, 0.95, 2);
+    text(label, x + w/2, y + 3, 1, color, "center");
+    return x + w + 4;
+  },
+  row(y, keys, desc, color) {
+    let x = 44;
+    for (const k of keys) x = this.cap(x, y, k, color || C.cyan);
+    text(desc, x + 6, y + 3, 1, C.light);
+  },
+  draw() {
+    menuBackground(this.scroll);
+    title("ANLEITUNG", 8);
+    panel(16, 38, 448, 182, C.deep, C.cyan, 0.85);
+    text(this.pages[this.page], VW/2, 44, 2, C.amber, "center");
+    if (this.page === 0) {
+      const y = 62;
+      this.row(y,      ["LINKS","RECHTS"], "SPUR WECHSELN");
+      this.row(y + 19, ["HOCH","LEER"],    "SPRINGEN", C.lime);
+      this.row(y + 38, ["RUNTER"],         "RUTSCHEN", C.lime);
+      this.row(y + 57, ["X"],              "PUNCHEN - KISTEN UND DROHNEN", C.magenta);
+      this.row(y + 76, ["P"],              "PAUSE", C.amber);
+      this.row(y + 95, ["M"],              "TON AN UND AUS", C.violet);
+      this.row(y + 114,["F"],              "VOLLBILD", C.violet);
+      this.row(y + 133,["ESC"],            "ZURUECK", C.grey);
+      text("AM HANDY: WISCHEN ZUM AUSWEICHEN, TIPPEN ZUM PUNCHEN",
+           VW/2, 210, 1, C.amber, "center");
+    } else if (this.page === 1) {
+      const items = [
+        ["barrier","HUERDE","SPRINGEN",C.lime,1.3],
+        ["lowbar","BALKEN","RUTSCHEN",C.amber,1.3],
+        ["train","ZUG","SPUR WECHSELN",C.magenta,1.0],
+        ["crate","KISTE","PUNCHEN - GIBT COINS",C.lime,1.4],
+        ["drone","DROHNE","PUNCHEN - GIBT PUNKTE",C.lime,1.4],
+        ["coin","COIN","EINSAMMELN",C.amber,2.0],
+        ["magnet","MAGNET","ZIEHT COINS AN",C.magenta,2.0],
+        ["shield","SCHILD","FAENGT EINEN TREFFER",C.lime,2.0],
+      ];
+      let y = 60;
+      for (const [spr, name, eff, col, sc] of items) {
+        const s = SPR[spr];
+        const w = Math.round(s.width * sc), h = Math.round(s.height * sc);
+        g.drawImage(s, 52 - (w >> 1), y + 8 - (h >> 1), w, h);
+        text(name, 78, y + 1, 1, col);
+        text(eff, 78, y + 11, 1, C.light);
+        y += 19;
+      }
+      text("GRUEN UMRANDET = ZERSCHLAGBAR", VW/2, 212, 1, C.lime, "center");
+    } else {
+      const L = { x:24, y:56, w:212, h:150 }, R = { x:244, y:56, w:212, h:150 };
+      panel(L.x, L.y, L.w, L.h, C.dark, C.cyan, 0.9);
+      text("ENDLESS RUN", L.x + L.w/2, L.y + 8, 2, C.cyan, "center");
+      ["Der klassische Lauf.","","Ein Treffer beendet","den Durchgang sofort.","",
+       "Coins sind freiwillig","und bringen Punkte.","","PUNKTE = STRECKE","     + COINS X 10"]
+        .forEach((l, i) => text(l, L.x + 12, L.y + 30 + i * 11, 1,
+                                l.startsWith("PUNKTE") || l.startsWith("     +") ? C.cyan : C.light));
+      panel(R.x, R.y, R.w, R.h, C.dark, C.violet, 0.9);
+      text("BLACKOUT", R.x + R.w/2, R.y + 8, 2, C.violet, "center");
+      ["Die Strecke ist dunkel.","","Dein Licht laeuft auf","einem Akku, der leerer",
+       "wird - und mit ihm","schrumpft die Sicht.","","Coins laden den Akku.",
+       "Leer = 3 Sekunden blind,","dann ist Schluss."]
+        .forEach((l, i) => text(l, R.x + 12, R.y + 30 + i * 11, 1, C.light));
+      text("IM BLACKOUT SIND COINS KEINE PUNKTE, SONDERN DEIN UEBERLEBEN.",
+           VW/2, 210, 1, C.amber, "center");
+    }
+    for (let i = 0; i < this.pages.length; i++) {
+      g.fillStyle = i === this.page ? C.cyan : C.grey;
+      g.fillRect(VW/2 - (this.pages.length - 1) * 5 + i * 10 - 2, 224, 4, 4);
+    }
+    this.buttons.forEach(b => b.draw(App.frame));
+    vignette(0.5);
+  },
+};
+
+/* --------------------------------------------------------- Musik und Ton */
+SCENES.audio = {
+  music: null, sel: 0, scroll: 0, backAction: "menu", drag: null,
+  sliders: [
+    { x:140, y:84, w:200, label:"MUSIK", key:"music", color:C.violet },
+    { x:140, y:118, w:200, label:"EFFEKTE", key:"sfx", color:C.cyan },
+  ],
+  buttons: [
+    new Button(140, 140, 200, 22, "TON AUSSCHALTEN", "mute", C.magenta, 1),
+    new Button(140, 168, 96, 20, "HOERPROBE", "test", C.cyan, 1),
+    new Button(244, 168, 96, 20, "TITEL WECHSELN", "track", C.amber, 1),
+    new Button(VW/2 - 60, 200, 120, 20, "HAUPTMENUE", "menu", C.grey, 1),
+  ],
+  enter() { this.sel = 0; this.sync(); },
+  sync() {
+    this.buttons[0].label = Sound.muted ? "TON EINSCHALTEN" : "TON AUSSCHALTEN";
+    this.buttons[0].color = Sound.muted ? C.lime : C.magenta;
+  },
+  setVal(s, x) {
+    const v = Math.max(0, Math.min(1, (x - s.x) / s.w));
+    Save.data.settings[s.key] = Math.round(v * 100) / 100;
+    Save.data.settings.muted = false; Sound.setMuted(false);
+    if (s.key === "music") Sound.musicVol = v; else Sound.sfxVol = v;
+    Save.commit(); this.sync();
+  },
+  act(a) {
+    if (a === "menu") { App.go("menu"); return; }
+    if (a === "mute") { toggleMute(); this.sync(); }
+    else if (a === "test") { Sound.play("coin"); setTimeout(() => Sound.play("power"), 130);
+                             App.toast("HOERPROBE", C.cyan); }
+    else if (a === "track") {
+      const order = ["menu", "game", "blackout"];
+      const next = order[(order.indexOf(Sound.track) + 1) % order.length] || "menu";
+      Sound.stopMusic(); Sound.music(next);
+      App.toast("TITEL: " + next.toUpperCase(), C.violet);
+    }
+  },
+  update(actions) {
+    this.scroll += 0.35;
+    const p = Input.pointer, rest = [];
+    for (const a of actions) {
+      if (typeof a === "object") {
+        if (a.type === "down") {
+          const s = this.sliders.find(s => a.x >= s.x - 6 && a.x <= s.x + s.w + 6
+                                        && a.y >= s.y - 8 && a.y <= s.y + 14);
+          if (s) { this.drag = s; this.setVal(s, a.x); continue; }
+        }
+        rest.push(a); continue;
+      }
+      if (a === "left" || a === "right") {
+        const s = this.sliders[Math.min(this.sel, 1)];
+        this.setVal(s, s.x + (Save.data.settings[s.key] + (a === "right" ? 0.05 : -0.05)) * s.w);
+        Sound.play("hover"); continue;
+      }
+      rest.push(a);
+    }
+    if (this.drag) { if (p.down) this.setVal(this.drag, p.x); else this.drag = null; }
+    menuInput(this, rest);
+  },
+  meter() {
+    const r = { x:30, y:84, w:96, h:104 };
+    panel(r.x, r.y, r.w, r.h, C.dark, C.grey, 0.85);
+    text("PEGEL", r.x + r.w/2, r.y + 6, 1, C.grey, "center");
+    const vol = Sound.muted ? 0 : Save.data.settings.music;
+    for (let i = 0; i < 9; i++) {
+      const wave = (Math.sin(this.scroll * 0.11 + i * 0.9) + 1) / 2;
+      const h = Math.floor(wave * vol * 54) + (vol > 0 ? 2 : 1);
+      const col = vol <= 0 ? C.grey : h > 40 ? C.magenta : h > 24 ? C.amber : C.lime;
+      g.fillStyle = col;
+      g.fillRect(r.x + 8 + i * 10, r.y + r.h - 20 - h, 6, h);
+    }
+    g.fillStyle = C.near; g.fillRect(r.x + 8, r.y + r.h - 17, r.w - 16, 1);
+    text((Sound.track || "-").toUpperCase(), r.x + r.w/2, r.y + r.h - 13, 1, C.violet, "center");
+  },
+  draw() {
+    menuBackground(this.scroll);
+    title("MUSIK UND TON", 10);
+    this.meter();
+    this.sliders.forEach((s, i) => {
+      const v = Save.data.settings[s.key];
+      const active = this.sel === i || this.drag === s;
+      const col = Sound.muted ? C.grey : s.color;
+      text(s.label, s.x, s.y - 13, 1, active ? C.white : C.light);
+      text(Math.round(v * 100) + "%", s.x + s.w, s.y - 13, 1, col, "right");
+      g.fillStyle = C.near; g.fillRect(s.x, s.y, s.w, 6);
+      g.strokeStyle = active ? col : C.grey; g.strokeRect(s.x + .5, s.y + .5, s.w - 1, 5);
+      const fw = Math.floor((s.w - 2) * v);
+      g.fillStyle = col;
+      for (let x = 0; x < fw; x += 3) g.fillRect(s.x + 1 + x, s.y + 1, 2, 4);
+      g.fillStyle = active ? C.white : C.light;
+      g.fillRect(s.x + fw - 1, s.y - 3, 4, 12);
+    });
+    if (Sound.muted) text("ALLES STUMMGESCHALTET", 240, 62, 1, C.magenta, "center");
+    else text("ALLE KLAENGE WERDEN IM SPIEL BERECHNET", 240, 62, 1, C.grey, "center");
+    this.buttons.forEach(b => b.draw(App.frame));
+    footer("LINKS RECHTS AENDERT   M SCHALTET STUMM");
+    vignette(0.5);
+  },
+};
+
+/* ------------------------------------------------------------ Gluecksrad */
+/* Acht gleich grosse Felder - die Anzeige entspricht also genau den
+   Gewinnchancen. Nichts ist heimlich seltener, als es aussieht. */
+/* short = Kuerzel im Rad (der Platz pro Segment ist knapp),
+   label = ausgeschriebener Name in der Preisliste daneben. */
+const WHEEL = [
+  { id:"coins50",  short:"50",   label:"50 COINS",  color:C.amber },
+  { id:"power",    short:"PWR",  label:"POWER-UP",  color:C.violet },
+  { id:"skin",     short:"SKIN", label:"NEUER SKIN",color:C.magenta },
+  { id:"coins50b", short:"50",   label:"50 COINS",  color:C.amber },
+  { id:"revive",   short:"REV",  label:"REVIVE",    color:C.cyan },
+  { id:"coins150", short:"150",  label:"150 COINS", color:C.lime },
+  { id:"nothing",  short:"NIX",  label:"NIETE",     color:C.grey },
+  { id:"jackpot",  short:"JACK", label:"JACKPOT 500",color:C.lime },
+];
+const SPIN_COST = 100;
+
+SCENES.wheel = {
+  music: "menu", sel: 0, scroll: 0, backAction: "menu",
+  angle: 0, vel: 0, spinning: false, result: null, tickAt: 0, flash: 0,
+  buttons: [
+    new Button(38, 224, 110, 22, "DREHEN", "spin", C.lime, 2),
+    new Button(156, 224, 64, 22, "HOME", "menu", C.grey, 1),
+  ],
+  enter() { this.sel = 0; this.spinning = false; this.result = null; this.vel = 0; this.sync(); },
+  sync() {
+    const can = Save.data.coins >= SPIN_COST && !this.spinning;
+    this.buttons[0].enabled = can;
+    this.buttons[0].label = this.spinning ? "DREHT..." : "DREHEN";
+  },
+  act(a) {
+    if (a === "menu") { App.go("menu"); return; }
+    if (a === "spin") this.spin();
+  },
+  spin() {
+    if (this.spinning || Save.data.coins < SPIN_COST) return;
+    Save.data.coins -= SPIN_COST; Save.commit();
+    this.spinning = true; this.result = null;
+    // Zielfeld vorher ziehen, dann so viel Schwung geben, dass das Rad
+    // genau dort stehen bleibt. Gleichverteilt ueber alle acht Felder.
+    const target = Math.floor(Math.random() * WHEEL.length);
+    const seg = (Math.PI * 2) / WHEEL.length;
+    const turns = 5 + Math.random() * 2;
+    this.targetAngle = turns * Math.PI * 2 + (Math.PI * 2 - (target + 0.5) * seg);
+    this.startAngle = this.angle % (Math.PI * 2);
+    this.spinT = 0; this.spinDur = 150 + Math.floor(Math.random() * 40);
+    this.targetIndex = target;
+    this.sync();
+  },
+  award(prize) {
+    const d = Save.data;
+    if (prize.id.startsWith("coins")) {
+      const n = parseInt(prize.id.replace(/\D/g, ""), 10);
+      d.coins += n; App.toast("+" + n + " COINS", C.amber); Sound.play("win");
+    } else if (prize.id === "jackpot") {
+      d.coins += 500; App.toast("JACKPOT! +500 COINS", C.lime); Sound.play("fanfare");
+    } else if (prize.id === "revive") {
+      d.revives++; App.toast("REVIVE ERHALTEN", C.cyan); Sound.play("win");
+    } else if (prize.id === "power") {
+      const id = POWER_IDS[Math.floor(Math.random() * POWER_IDS.length)];
+      d.charges[id] = (d.charges[id] || 0) + 1;
+      App.toast(POWERS[id].name + " FUER DEN START", POWERS[id].color); Sound.play("win");
+    } else if (prize.id === "skin") {
+      const locked = SKINS.filter(s => !d.skins.includes(s.id));
+      if (locked.length) {
+        const s = locked[Math.floor(Math.random() * locked.length)];
+        d.skins.push(s.id); d.skin = s.id;
+        App.toast("NEUER SKIN: " + s.name, C.magenta); Sound.play("fanfare");
+      } else { d.coins += 200; App.toast("ALLE SKINS DA - +200 COINS", C.amber); Sound.play("win"); }
+    } else { App.toast("NIETE - NAECHSTES MAL", C.grey); Sound.play("lose"); }
+    Save.commit(); this.sync();
+  },
+  update(actions) {
+    this.scroll += 0.35;
+    if (this.flash > 0) this.flash--;
+    if (this.spinning) {
+      this.spinT++;
+      const t = Math.min(1, this.spinT / this.spinDur);
+      const e = 1 - Math.pow(1 - t, 3.2);                 // sanftes Ausrollen
+      this.angle = this.startAngle + (this.targetAngle - this.startAngle) * e;
+      const seg = (Math.PI * 2) / WHEEL.length;
+      const idx = Math.floor(this.angle / seg);
+      if (idx !== this.tickAt) { this.tickAt = idx; if (t < 0.97) Sound.play("tick"); }
+      if (t >= 1) {
+        this.spinning = false;
+        this.result = WHEEL[this.targetIndex];
+        this.flash = 20;
+        this.award(this.result);
+      }
+      this.sync();
+      return;
+    }
+    menuInput(this, actions);
+  },
+  drawWheel(cx, cy, r) {
+    const seg = (Math.PI * 2) / WHEEL.length;
+    for (let i = 0; i < WHEEL.length; i++) {
+      const a0 = this.angle + i * seg, a1 = a0 + seg;
+      g.beginPath(); g.moveTo(cx, cy); g.arc(cx, cy, r, a0, a1); g.closePath();
+      g.fillStyle = WHEEL[i].color; g.globalAlpha = 0.34; g.fill();
+      g.globalAlpha = 1; g.strokeStyle = WHEEL[i].color; g.lineWidth = 1; g.stroke();
+      // Beschriftung entlang des Segments
+      const mid = a0 + seg / 2;
+      const lx = cx + Math.cos(mid) * r * 0.62, ly = cy + Math.sin(mid) * r * 0.62;
+      text(WHEEL[i].short, lx, ly - 3, 1, WHEEL[i].color, "center");
+    }
+    g.beginPath(); g.arc(cx, cy, r * 0.22, 0, 6.2832);
+    g.fillStyle = C.dark; g.fill(); g.strokeStyle = C.white; g.stroke();
+    text("SPIN", cx, cy - 3, 1, C.white, "center");
+    // Zeiger oben
+    g.beginPath(); g.moveTo(cx, cy - r - 9); g.lineTo(cx - 6, cy - r + 3);
+    g.lineTo(cx + 6, cy - r + 3); g.closePath();
+    g.fillStyle = C.white; g.fill(); g.strokeStyle = C.black; g.stroke();
+  },
+  draw() {
+    menuBackground(this.scroll);
+    title("GLUECKSRAD", 6);
+    const cx = 128, cy = 142, r = 58;
+    this.drawWheel(cx, cy, r);
+    if (this.flash > 0) {
+      g.save(); g.globalAlpha = this.flash / 20 * 0.45;
+      g.fillStyle = C.white; g.fillRect(0, 0, VW, VH); g.restore();
+    }
+    // Preisliste: Kuerzel im Rad, ausgeschriebene Namen und echte Chancen hier.
+    const P = { x:246, y:40, w:220, h:178 };
+    panel(P.x, P.y, P.w, P.h, C.dark, C.amber, 0.92);
+    text("PREISE", P.x + P.w/2, P.y + 7, 1, C.amber, "center");
+    g.fillStyle = C.near; g.fillRect(P.x + 10, P.y + 18, P.w - 20, 1);
+    const seen = new Set(); let y = P.y + 24;
+    for (const w of WHEEL) {
+      if (seen.has(w.label)) continue; seen.add(w.label);
+      const n = WHEEL.filter(x => x.label === w.label).length;
+      text(w.label, P.x + 12, y, 1, w.color);
+      text(n + " / " + WHEEL.length, P.x + P.w - 12, y, 1, C.grey, "right");
+      y += 12;
+    }
+    g.fillStyle = C.near; g.fillRect(P.x + 10, y + 3, P.w - 20, 1);
+    y += 9;
+    text("SKINS", P.x + 12, y, 1, C.grey);
+    text(Save.data.skins.length + " / " + SKINS.length, P.x + P.w - 12, y, 1, C.light, "right");
+    y += 12;
+    text("REVIVES", P.x + 12, y, 1, C.grey);
+    text(String(Save.data.revives), P.x + P.w - 12, y, 1,
+         Save.data.revives ? C.cyan : C.light, "right");
+    y += 12;
+    const ch = Object.entries(Save.data.charges).filter(([, n]) => n > 0);
+    text("POWER-UPS", P.x + 12, y, 1, C.grey);
+    text(ch.length ? ch.reduce((a, [, n]) => a + n, 0) + " BEREIT" : "-",
+         P.x + P.w - 12, y, 1, ch.length ? C.violet : C.light, "right");
+    y += 12;
+    text("AKTUELLER SKIN", P.x + 12, y, 1, C.grey);
+    text(SKINS.find(s2 => s2.id === Save.data.skin)?.name || "-",
+         P.x + P.w - 12, y, 1, C.magenta, "right");
+
+    coinPill(8, 8);
+    const afford = Save.data.coins >= SPIN_COST;
+    text("EINE DREHUNG KOSTET " + SPIN_COST + " COINS", cx, 208, 1,
+         afford ? C.lime : C.magenta, "center");
+    this.buttons.forEach(b => b.draw(App.frame));
+    if (this.result && !this.spinning)
+      text("GEWONNEN: " + this.result.label, cx, 252, 1, this.result.color, "center");
+    else if (!afford)
+      text("SAMMLE COINS IM SPIEL", cx, 252, 1, C.grey, "center");
+    vignette(0.5);
+  },
+};
+
+/* ================================================================= SPIEL */
+SCENES.play = {
+  music: "game",
+  enter(opts) {
+    const mode = opts.mode || "endless";
+    this.mode = mode;
+    this.blackout = mode === "blackout";
+    this.music = this.blackout ? "blackout" : "game";
+    Sound.music(this.music);
+    this.player = new Player();
+    this.objs = []; this.picks = []; this.parts = [];
+    this.gen = new Generator(this.blackout);
+    this.speed = BASE_SPEED; this.dist = 0; this.coins = 0; this.score = 0;
+    this.scroll = 0; this.shake = 0; this.frames = 0;
+    this.effects = {}; this.battery = BATTERY_MAX; this.blind = 0; this.warned = false;
+    this.countdown = 170; this.done = false; this.hitFlash = 0;
+    this.usedRevive = false;
+    this.skin = Save.data.skin;
+    // Vorab gewonnene Power-Ups werden beim Start eingeloest.
+    for (const id in Save.data.charges) {
+      while (Save.data.charges[id] > 0) {
+        Save.data.charges[id]--;
+        this.applyPower(id, true);
+      }
+    }
+    if (Object.keys(Save.data.charges).length) Save.commit();
+  },
+  currentScore() {
+    return this.blackout ? Math.floor(this.dist * 2.5)
+                         : Math.floor(this.dist + this.coins * 10);
+  },
+  openPause() {
+    App.openPopup(new Popup("PAUSE",
+      ["Strecke: " + Math.floor(this.dist) + " M", "Punkte: " + this.currentScore()],
+      [["CONTINUE", "resume", C.lime], ["NEU STARTEN", "restart", C.amber], ["QUIT", "menu", C.magenta]],
+      C.lime, 236, "resume"));
+  },
+  popupAction(a) {
+    if (a === "resume") { App.closePopup(); this.countdown = Math.max(this.countdown, 100); }
+    else if (a === "restart") { App.closePopup(); this.enter({ mode: this.mode }); }
+    else if (a === "menu") { App.closePopup(); App.go("menu"); }
+    else if (a === "revive") { App.closePopup(); this.doRevive(); }
+    else if (a === "giveup") { App.closePopup(); this.finish(); }
+  },
+  doRevive() {
+    Save.data.revives--; Save.commit();
+    this.usedRevive = true;
+    this.player.state = "run"; this.player.height = 0; this.player.vy = 0;
+    this.player.inv = 150; this.player.crashT = 0;
+    this.objs = this.objs.filter(o => o.z > 26);
+    if (this.blackout) this.battery = BATTERY_MAX * 0.7;
+    this.blind = 0; this.countdown = 110;
+    Sound.play("fanfare"); App.toast("REVIVE EINGESETZT", C.cyan);
+  },
+  update(actions) {
+    this.frames++;
+    for (const a of actions) {
+      if (a === "pause" || a === "back") { if (!this.done) this.openPause(); return; }
+      if (a === "mute") { toggleMute(); continue; }
+      if (a === "full") { toggleFullscreen(); continue; }
+      if (typeof a === "object") {
+        if (a.type === "tap") this.tryPunch();     // Tippen = Punch (Touch)
+        continue;
+      }
+      if (this.countdown > 0 || this.player.state === "crash") continue;
+      if (a === "left")  { if (this.player.move(-1)) Sound.play("hover"); }
+      else if (a === "right") { if (this.player.move(1)) Sound.play("hover"); }
+      else if (a === "up") { if (this.player.jump()) Sound.play("jump"); }
+      else if (a === "down") { if (this.player.duck()) Sound.play("slide"); }
+      else if (a === "punch") this.tryPunch();
+    }
+    if (this.countdown > 0) { this.countdown--; return; }
+    if (this.player.state === "crash") { this.updateCrash(); return; }
+
+    const slow = this.effects.slowmo ? 0.45 : 1;
+    this.speed = (BASE_SPEED + this.dist * SPEED_RAMP) * slow;   // ohne Obergrenze
+    if (this.blackout) this.speed *= 0.82;
+    if (this.effects.boost) this.speed *= 1.45;
+
+    /* Bei hohem Tempo in mehreren kleinen Schritten rechnen. Sonst koennte
+       ein Objekt die Trefferzone in einem einzigen Frame ueberspringen. */
+    const steps = Math.max(1, Math.ceil(this.speed / 0.8));
+    const sub = this.speed / steps;
+    for (let i = 0; i < steps; i++) {
+      this.dist += sub; this.scroll += sub;
+      for (const o of this.objs) o.advance(sub);
+      for (const p of this.picks) p.advance(sub);
+      this.checkObstacles();
+      this.checkPicks();
+      if (this.player.state === "crash") break;
+    }
+    const land = this.player.update(this.speed);
+    if (land === "land") Sound.play("land");
+    this.gen.spawn(this.dist, this.speed, this.objs, this.picks);
+    this.objs = this.objs.filter(o => o.alive || o.smashed > 0);
+    for (const o of this.objs) if (o.smashed > 0 && ++o.smashed > 12) o.alive = false;
+    this.objs = this.objs.filter(o => o.alive);
+    this.picks = this.picks.filter(p => p.alive);
+    for (const k in this.effects) if (--this.effects[k] <= 0) {
+      delete this.effects[k]; App.toast(POWERS[k].name + " VORBEI", C.grey);
+    }
+    if (this.blackout) this.updateBattery();
+    this.updateParts();
+    if (this.hitFlash > 0) this.hitFlash--;
+    this.score = this.currentScore();
+  },
+  tryPunch() {
+    if (this.countdown > 0 || this.player.state === "crash") return;
+    if (!this.player.punch()) { if (this.player.cool > 0) Sound.play("whiff"); return; }
+    Sound.play("punch");
+    // Alles Zerschlagbare in Reichweite der eigenen Spur zerlegen.
+    let hits = 0;
+    for (const o of this.objs) {
+      if (!o.alive || o.smashed > 0 || !o.def.punchable) continue;
+      if (o.lane !== this.player.lane) continue;
+      if (o.z > PUNCH_REACH_Z || o.z + o.def.depth < HIT_MIN) continue;
+      o.smashed = 1; hits++;
+      const rw = o.def.reward || {};
+      const gain = (rw.coins || 0) * (this.effects.double ? 2 : 1);
+      this.coins += gain;
+      this.dist += (rw.score || 0) / 3;
+      if (this.blackout) this.battery = Math.min(BATTERY_MAX, this.battery + gain * BATTERY_COIN);
+      this.player.combo++; this.player.comboT = 150;
+      this.burst(o, C.lime, 18);
+    }
+    if (hits) {
+      Sound.play("smash"); this.hitFlash = 6; this.shake = 5;
+      if (this.player.combo > 1) App.toast("COMBO x" + this.player.combo, C.lime);
+    }
+  },
+  checkObstacles() {
+    const p = this.player;
+    for (const o of this.objs) {
+      if (!o.alive || o.smashed > 0 || !o.inHit() || o.lane !== p.lane) continue;
+      if (this.effects.boost && o.def.punchable) {       // Boost walzt Kisten um
+        o.smashed = 1; this.coins += (o.def.reward?.coins || 0);
+        this.burst(o, C.cyan, 14); Sound.play("smash"); continue;
+      }
+      if (!o.def.blocks({ height: p.height, head: p.head })) continue;
+      if (this.effects.boost) { o.smashed = 1; this.burst(o, C.cyan, 10); continue; }
+      const hadShield = p.shield;
+      if (p.hurt()) {
+        Sound.play("crash"); this.shake = 9; this.burstAt(C.magenta, 26);
+      } else if (hadShield) {
+        Sound.play("power"); App.toast("SCHILD VERBRAUCHT", C.lime);
+        this.shake = 4; this.burstAt(C.lime, 14); o.alive = false;
+      }
+      return;
+    }
+  },
+  checkPicks() {
+    const p = this.player, magnet = !!this.effects.magnet;
+    for (const pk of this.picks) {
+      if (!pk.alive) continue;
+      if (magnet && pk.type === "coin" && pk.z < 26) pk.attract(p.lane);
+      if (!pk.inHit()) continue;
+      if (Math.abs(pk.lane - p.lane) >= 0.55) continue;
+      if (Math.abs(p.height - pk.h) > REACH) continue;
+      pk.alive = false;
+      if (pk.type === "coin") this.collectCoin();
+      else this.applyPower(pk.type);
+    }
+  },
+  collectCoin() {
+    const n = this.effects.double ? 2 : 1;
+    this.coins += n; Sound.play("coin"); this.burstAt(C.amber, 4);
+    if (this.blackout) {
+      this.battery = Math.min(BATTERY_MAX, this.battery + BATTERY_COIN * n);
+      if (this.battery > 35) this.warned = false;
+      if (this.blind > 0) { this.blind = 0; App.toast("LICHT WIEDER DA", C.lime); }
+    }
+  },
+  applyPower(id, silent) {
+    const def = POWERS[id];
+    if (!silent) { Sound.play("power"); this.burstAt(def.color, 16); }
+    App.toast(def.name + (silent ? " (AUS DEM RAD)" : ""), def.color);
+    if (id === "shield") this.player.shield = true;
+    else this.effects[id] = def.dur;
+  },
+  updateBattery() {
+    this.battery = Math.max(0, this.battery - BATTERY_DRAIN * (1 + this.dist / 4200));
+    if (this.battery > 0 && this.battery <= 30 && !this.warned) {
+      this.warned = true; Sound.play("warn"); App.toast("AKKU FAST LEER", C.magenta);
+    }
+    if (this.battery <= 0) {
+      this.blind++;
+      if (this.blind % 40 === 1) Sound.play("warn");
+      if (this.blind >= BLIND_FRAMES) { this.player.hurt(); Sound.play("crash"); this.shake = 9; }
+    }
+  },
+  updateCrash() {
+    this.player.update(this.speed);
+    this.speed *= 0.9;
+    for (const o of this.objs) o.advance(this.speed);
+    for (const p of this.picks) p.advance(this.speed);
+    this.updateParts();
+    if (this.player.crashT > 60 && !this.done && !App.popup) {
+      if (Save.data.revives > 0 && !this.usedRevive) {
+        App.openPopup(new Popup("WEITER?",
+          ["Du hast " + Save.data.revives + " Revive" + (Save.data.revives > 1 ? "s" : "") + ".",
+           "Einsetzen und weiterlaufen?"],
+          [["REVIVE EINSETZEN", "revive", C.cyan], ["AUFGEBEN", "giveup", C.grey]],
+          C.cyan, 236, "giveup"));
+      } else if (this.player.crashT > 78) this.finish();
+    }
+  },
+  finish() {
+    if (this.done) return;
+    this.done = true;
+    App.go("gameover", {
+      mode: this.mode, score: this.score, dist: Math.floor(this.dist),
+      coins: this.coins, cause: this.blackout && this.battery <= 0 ? "battery" : "crash",
+      revived: this.usedRevive,
+    });
+  },
+  burst(o, color, n) {
+    const p = project(o.z, o.lane - 1, o.h + 8);
+    this.spawnParts(p.x, p.y, color, n);
+  },
+  burstAt(color, n) {
+    const p = project(0, this.player.off, this.player.height + 8);
+    this.spawnParts(p.x, p.y, color, n);
+  },
+  spawnParts(x, y, color, n) {
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * 6.2832, s = 0.6 + Math.random() * 2.6;
+      this.parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 0.9,
+                        life: 16 + Math.floor(Math.random() * 26), color });
+    }
+  },
+  updateParts() {
+    for (const p of this.parts) { p.x += p.vx; p.y += p.vy; p.vy += 0.13; p.life--; }
+    this.parts = this.parts.filter(p => p.life > 0);
+  },
+
+  /* ---------------------------------------------------------- Zeichnen */
+  draw() {
+    let sx = 0, sy = 0;
+    if (this.shake > 0.3) {
+      sx = Math.round((Math.random() * 2 - 1) * this.shake);
+      sy = Math.round((Math.random() * 2 - 1) * this.shake * 0.5);
+      this.shake *= 0.86;
+    }
+    g.save(); g.translate(sx, sy);
+    bgLayers(this.scroll, true);
+    g.fillStyle = C.violet; g.fillRect(0, HORIZON - 1, VW, 1);
+    this.drawRoad();
+    this.drawWorld();
+    this.drawParts();
+    if (this.blackout) this.drawDarkness();
+    g.restore();
+    if (!this.blackout) vignette(0.5);
+    if (this.hitFlash > 0) {
+      g.save(); g.globalAlpha = this.hitFlash / 6 * 0.5;
+      g.fillStyle = C.white; g.fillRect(0, 0, VW, VH); g.restore();
+    }
+    this.drawHUD();
+    if (this.countdown > 0) this.drawCountdown();
+  },
+  /* Die Strasse wird zeilenweise gezeichnet: zu jeder Bildzeile wird die
+     passende Tiefe zurueckgerechnet. So bleiben die Spurlinien lueckenlos
+     statt treppenfoermig. */
+  drawRoad() {
+    g.fillStyle = C.near; g.fillRect(0, HORIZON, VW, VH - HORIZON);
+    const span = GROUND - HORIZON;
+    for (let y = HORIZON + 1; y < VH; y++) {
+      const d = (y - HORIZON) / span;
+      if (d <= 0) continue;
+      const z = (1 / d - 1) / DEPTH_K;
+      const w = ROAD_FAR + (ROAD_NEAR - ROAD_FAR) * d;
+      const left = Math.round(CENTER - w / 2);
+      const phase = Math.floor((z + this.scroll) / 4) & 1;
+      g.fillStyle = phase ? C.track : "#271f4a";
+      g.fillRect(left, y, Math.round(w) + 1, 1);
+      const lw = Math.max(1, Math.round(d * 2));
+      g.fillStyle = C.line;
+      g.fillRect(Math.round(CENTER - w * 0.33) - (lw >> 1), y, lw, 1);
+      g.fillRect(Math.round(CENTER + w * 0.33) - (lw >> 1), y, lw, 1);
+      g.fillStyle = C.rail;
+      g.fillRect(Math.round(CENTER - w * 0.5) - (lw >> 1), y, lw, 1);
+      g.fillRect(Math.round(CENTER + w * 0.5) - (lw >> 1), y, lw, 1);
+    }
+  },
+  drawWorld() {
+    const all = this.objs.filter(o => o.alive || o.smashed > 0)
+      .concat(this.picks.filter(p => p.alive));
+    all.sort((a, b) => b.z - a.z);
+    for (const o of all) {
+      if (o.z > SPAWN_Z || o.z < DRAW_Z_MIN) continue;
+      o.draw();
+    }
+    this.player.draw(this.skin);
+  },
+  drawParts() {
+    for (const p of this.parts) {
+      if (p.x < 0 || p.x >= VW || p.y < 0 || p.y >= VH) continue;
+      g.fillStyle = p.color;
+      const s = p.life > 22 ? 2 : 1;
+      g.fillRect(Math.round(p.x), Math.round(p.y), s, s);
+    }
+  },
+  drawDarkness() {
+    const ratio = this.battery / BATTERY_MAX;
+    let r = LIGHT_EMPTY + (LIGHT_FULL - LIGHT_EMPTY) * ratio;
+    if (this.battery <= 0) {
+      const f = Math.max(0, 1 - this.blind / BLIND_FRAMES);
+      r = LIGHT_EMPTY * f * (0.75 + 0.25 * Math.sin(this.frames * 0.7));
+    } else if (ratio < 0.3) r *= 0.92 + 0.08 * Math.sin(this.frames * 0.35);
+    const p = project(0, this.player.off, this.player.height * 0.45);
+    const cx = p.x, cy = p.y - LIGHT_AHEAD;
+    if (r >= 8) {
+      const rad = g.createRadialGradient(cx, cy, Math.max(1, r * 0.12), cx, cy, r);
+      rad.addColorStop(0, "rgba(0,0,0,0)");
+      rad.addColorStop(0.55, "rgba(0,0,0,0.55)");
+      rad.addColorStop(1, "rgba(0,0,0,0.975)");
+      g.fillStyle = rad; g.fillRect(0, 0, VW, VH);
+    } else { g.fillStyle = "rgba(0,0,0,0.975)"; g.fillRect(0, 0, VW, VH); }
+  },
+  drawHUD() {
+    text(String(this.score).padStart(7, "0"), 8, 7, 2, C.white, "left", C.cyan);
+    text(Math.floor(this.dist) + " M", 8, 24, 1, C.light);
+    // Coins rechts oben, waechst nach links
+    const ct = String(this.coins);
+    const r = text(ct, VW - 8, 8, 2, C.amber, "right");
+    g.drawImage(SPR.coin, r.x - 12, 7, 8, 8);
+    text(MODE_INFO[this.mode].label, VW - 8, 25, 1, C.grey, "right");
+
+    // Punch-Abklingzeit: der Balken sagt, wann der naechste Schlag sitzt.
+    const ready = this.player.cool <= 0;
+    const bx = 8, by = VH - 29, bw = 62, bh = 20;
+    panel(bx, by, bw, bh, C.dark, ready ? C.magenta : C.grey, 0.82, 2);
+    text("PUNCH", bx + 5, by + 4, 1, ready ? C.magenta : C.grey);
+    const frac = ready ? 1 : 1 - this.player.cool / PUNCH_COOLDOWN;
+    g.fillStyle = C.near; g.fillRect(bx + 5, by + 13, bw - 10, 3);
+    g.fillStyle = ready ? C.magenta : C.violet;
+    g.fillRect(bx + 5, by + 13, Math.round((bw - 10) * frac), 3);
+
+    // Laufende Effekte
+    let y = 38;
+    if (this.player.shield) { text("SCHILD", 8, y, 1, C.lime); y += 11; }
+    for (const k in this.effects) {
+      const d = POWERS[k];
+      text(d.name, 8, y, 1, d.color);
+      g.fillStyle = C.near; g.fillRect(8, y + 9, 46, 3);
+      g.fillStyle = d.color; g.fillRect(8, y + 9, Math.round(46 * this.effects[k] / (d.dur || 1)), 3);
+      y += 16;
+    }
+    if (this.player.combo > 1)
+      text("COMBO x" + this.player.combo, VW - 8, 38, 1, C.lime, "right");
+    if (this.blackout) this.drawBattery();
+    // Pause-Knopf oben links wie in der Skizze - auch antippbar
+    panel(VW/2 - 9, 6, 18, 14, C.dark, C.grey, 0.8, 2);
+    g.fillStyle = C.light; g.fillRect(VW/2 - 4, 9, 3, 8); g.fillRect(VW/2 + 1, 9, 3, 8);
+  },
+  drawBattery() {
+    const ratio = this.battery / BATTERY_MAX;
+    const x = VW/2 - 44, y = VH - 22, w = 88, h = 9;
+    panel(x - 3, y - 3, w + 6, h + 6, C.dark, C.grey, 0.85, 2);
+    const col = ratio > 0.5 ? C.lime : ratio > 0.25 ? C.amber : C.magenta;
+    const segs = 16, filled = Math.round(segs * ratio);
+    for (let i = 0; i < segs; i++) {
+      let c = i < filled ? col : C.near;
+      if (i < filled && ratio <= 0.25 && ((this.frames / 12) | 0) % 2 === 0) c = C.dark;
+      g.fillStyle = c; g.fillRect(x + 3 + i * 5, y + 2, 4, h - 4);
+    }
+    text("AKKU", x + w/2, y - 12, 1, col, "center");
+    if (this.battery <= 0) {
+      const left = (BLIND_FRAMES - this.blind) / 60;
+      text("BLIND! " + Math.max(0, left).toFixed(1) + " S", VW/2, VH - 44, 2,
+           C.magenta, "center", C.magenta);
+    }
+  },
+  drawCountdown() {
+    g.save(); g.globalAlpha = 0.42; g.fillStyle = "#000"; g.fillRect(0, 0, VW, VH); g.restore();
+    const sec = Math.floor(this.countdown / 40);
+    const t = ["LOS", "1", "2", "3", "3"][Math.min(4, sec)];
+    const phase = (this.countdown % 40) / 40;
+    const s = 5 + Math.floor(phase * 3);
+    const col = t === "LOS" ? C.lime : C.cyan;
+    text(t, VW/2, VH/2 - 20, s, col, "center", col);
+    if (this.frames < 240)
+      text("WISCHEN ODER PFEILE   TIPPEN ODER X = PUNCH", VW/2, VH - 50, 1, C.light, "center");
+  },
+};
+
+/* ---------------------------------------------------------- Game Over */
+const CAUSE = {
+  crash: "DU BIST IN EIN HINDERNIS GELAUFEN",
+  battery: "DER AKKU WAR LEER - DAS LICHT GING AUS",
+};
+SCENES.gameover = {
+  music: "menu", sel: 0, scroll: 0, backAction: "menu",
+  buttons: [
+    new Button(VW/2 - 100, 150, 200, 22, "PLAY AGAIN", "again", C.lime, 2),
+    new Button(14, 178, 108, 20, "MODUS WECHSELN", "swap", C.violet, 1),
+    new Button(126, 178, 108, 20, "GLUECKSRAD", "wheel", C.amber, 1),
+    new Button(238, 178, 108, 20, "HOME", "menu", C.cyan, 1),
+    new Button(350, 178, 116, 20, "NOCH EINMAL?", "again2", C.grey, 1),
+  ],
+  enter(o) {
+    this.mode = o.mode || "endless";
+    this.score = o.score | 0; this.dist = o.dist | 0; this.coins = o.coins | 0;
+    this.cause = o.cause || "crash"; this.revived = !!o.revived;
+    this.reveal = 0; this.confetti = []; this.sel = 0;
+    this.buttons.forEach((b, i) => b.hover = i === 0);
+    this.buttons[4].label = "COINS: " + Save.data.coins;
+    this.buttons[4].enabled = false;
+
+    const d = Save.data;
+    d.coins += this.coins; d.runs++;
+    this.isRecord = this.score > d.best[this.mode];
+    if (this.isRecord) d.best[this.mode] = this.score;
+    Save.commit();
+
+    if (this.isRecord && this.score > 0) {
+      Sound.play("fanfare");
+      for (let i = 0; i < 90; i++)
+        this.confetti.push({ x: Math.random() * VW, y: -Math.random() * VH,
+          vx: (Math.random() - .5) * .8, vy: .7 + Math.random() * 1.5,
+          c: [C.magenta, C.cyan, C.lime, C.amber, C.violet][Math.floor(Math.random() * 5)],
+          p: Math.random() * 6.28 });
+      App.openPopup(new Popup("NEW HIGHSCORE",
+        [MODE_INFO[this.mode].label + ": " + this.score + " PUNKTE",
+         "Das ist deine neue Bestleistung."],
+        [["STARK!", "close", C.lime], ["GLUECKSRAD", "wheel", C.amber]],
+        C.lime, 240, "close"));
+    }
+  },
+  popupAction(a) { if (a === "wheel") { App.closePopup(); App.go("wheel"); } },
+  act(a) {
+    if (a === "again" || a === "again2") App.go("play", { mode: this.mode });
+    else if (a === "swap") App.go("play", { mode: this.mode === "endless" ? "blackout" : "endless" });
+    else if (a === "wheel") App.go("wheel");
+    else if (a === "menu") App.go("menu");
+  },
+  update(actions) {
+    this.scroll += 0.35;
+    if (this.reveal < this.score) this.reveal = Math.min(this.score, this.reveal + Math.max(1, this.score / 45 | 0));
+    for (const f of this.confetti) {
+      f.x += f.vx + Math.sin(f.p) * 0.5; f.y += f.vy; f.p += 0.08;
+      if (f.y > VH) { f.y = -4; f.x = Math.random() * VW; }
+    }
+    menuInput(this, actions);
+  },
+  draw() {
+    menuBackground(this.scroll);
+    const col = this.cause === "crash" ? C.magenta : C.violet;
+    const bob = Math.sin(this.scroll * 0.04) * 1.5;
+    text(this.isRecord ? "NEW HIGHSCORE" : "GAME OVER", VW/2, 12 + bob,
+         this.isRecord ? 3 : 4, C.white, "center", this.isRecord ? C.lime : col);
+    text(CAUSE[this.cause] || "", VW/2, 44, 1, col, "center");
+    const R = { x:90, y:56, w:300, h:84 };
+    const mc = MODE_INFO[this.mode].color;
+    panel(R.x, R.y, R.w, R.h, C.dark, mc, 0.94);
+    text(MODE_INFO[this.mode].label, R.x + R.w/2, R.y + 6, 1, mc, "center");
+    text(String(this.reveal), R.x + R.w/2, R.y + 18, 4, C.white, "center", mc);
+    text("PUNKTE", R.x + R.w/2, R.y + 50, 1, C.grey, "center");
+    text("STRECKE", R.x + 16, R.y + R.h - 22, 1, C.grey);
+    text(this.dist + " M", R.x + 16, R.y + R.h - 12, 1, C.light);
+    text("COINS", R.x + R.w/2, R.y + R.h - 22, 1, C.grey, "center");
+    text("+" + this.coins, R.x + R.w/2, R.y + R.h - 12, 1, C.amber, "center");
+    text("REKORD", R.x + R.w - 16, R.y + R.h - 22, 1, C.grey, "right");
+    text(String(Save.data.best[this.mode]), R.x + R.w - 16, R.y + R.h - 12, 1,
+         this.isRecord ? C.lime : C.light, "right");
+    if (this.revived) text("MIT REVIVE", R.x + R.w/2, R.y - 10, 1, C.cyan, "center");
+    this.buttons.forEach(b => b.draw(App.frame));
+    footer("PFEILE ODER TIPPEN   ENTER BESTAETIGT");
+    for (const f of this.confetti) { g.fillStyle = f.c; g.fillRect(f.x | 0, f.y | 0, 2, 3); }
+    vignette(0.5);
+  },
+};
+
+/* ====================================================================== */
+/*  HAUPTSCHLEIFE                                                         */
+/* ====================================================================== */
+function handlePopup(actions) {
+  const p = App.popup;
+  const pt = Input.pointer;
+  p.hover(pt.x, pt.y);
+  for (const a of actions) {
+    let act = null;
+    if (typeof a === "object") {
+      if (a.type === "tap") act = p.hitTest(a.x, a.y);
+      else continue;
+    }
+    else if (a === "up" || a === "left") { p.move(-1); continue; }
+    else if (a === "down" || a === "right") { p.move(1); continue; }
+    else if (a === "confirm") { act = p.activate(); Sound.play("click"); }
+    else if (a === "back" || a === "pause") act = p.onCancel || "close";
+    else if (a === "mute") { toggleMute(); continue; }
+    if (!act) continue;
+    Sound.play("click");
+    if (act === "close") { App.closePopup(); return; }
+    App.scene.popupAction?.(act);
+    if (App.popup === p && act !== "close") {
+      // Aktionen, die kein Szenen-Handler kennt, schliessen das Pop-up.
+      if (!App.scene.popupAction) App.closePopup();
+    }
+    return;
+  }
+}
+
+let lastT = performance.now(), acc = 0;
+const STEP = 1000 / 60;
+
+function frame(now) {
+  requestAnimationFrame(frame);
+  acc += Math.min(200, now - lastT); lastT = now;
+  let guard = 0;
+  while (acc >= STEP && guard++ < 5) {
+    acc -= STEP;
+    App.frame++;
+    const actions = Input.take();
+    if (App.popup) handlePopup(actions);
+    else App.scene.update(actions);
+    for (let i = App.toasts.length - 1; i >= 0; i--) {
+      App.toasts[i].age++;
+      if (!App.toasts[i].alive) App.toasts.splice(i, 1);
+    }
+  }
+  App.scene.draw();
+  App.toasts.forEach((t, i) => t.draw(i));
+  if (App.popup) App.popup.draw(App.frame);
+  ctx.drawImage(buf, 0, 0, cvs.width, cvs.height);
+}
+
+/* --------------------------------------------------------------- Start */
+function start(restored) {
+  buildSprites();
+  buildBackground();
+  resize();
+  Save.applySettings();
+  document.getElementById("boot")?.remove();
+  App.go(restored?.scene === "menu" || !restored?.scene ? "menu" : "menu");
+  requestAnimationFrame(frame);
+  // Fortschritt geraeteuebergreifend nachladen, sobald verfuegbar.
+  Save.connect().then(() => {});
+}
+
+/* Wird die Seite neu veroeffentlicht, waehrend jemand spielt, sollen die
+   Einstellungen und der Fortschritt nicht verloren gehen. */
+window.claude?.hot?.snapshot?.(() => ({ scene: "menu" }));
+if (window.claude?.hot?.ready) window.claude.hot.ready(start);
+else start(window.claude?.hot?.data || {});
+</script>
