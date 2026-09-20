@@ -364,13 +364,19 @@
     "Think about it one more time",
     "But we'd be so cute together…",
     "Ouch. That one hurt a little",
+    "You know the Yes button is right there",
+    "Come on, be brave",
     "The No button is getting tired…",
     "Okay, now it's just being stubborn",
+    "Still no? Bold move",
+    "I can do this all day, you know",
     "Your heart says yes. I can tell",
+    "Look at it. It's tiny now",
+    "One more try. For me",
     "Last chance to change your mind",
-    "No is officially out of order"
+    "That's it. No is out of order"
   ];
-  var MAX_NO = 10;
+  var MAX_NO = 16;
 
   var ask = document.getElementById("ask");
   var happy = document.getElementById("happy");
@@ -399,9 +405,7 @@
     noBtn.style.setProperty("--s", (1 - 0.66*t).toFixed(3));
     yesBtn.style.setProperty("--s", (1 + 0.40*t).toFixed(3));
 
-    if (noCount < MAX_NO){
-      counter.textContent = "No clicks: " + noCount + " / " + MAX_NO;
-    } else {
+    if (noCount >= MAX_NO){
       counter.textContent = "The No button has left the building.";
       sub.textContent = "Only one option left. Funny how that works.";
       noBtn.classList.add("gone");
