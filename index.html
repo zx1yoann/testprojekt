@@ -195,7 +195,7 @@
   #no.gone{opacity:0;transform:translate(0,14px) scale(.25) rotate(-16deg);box-shadow:0 0 0 var(--outline);pointer-events:none;}
   #no[hidden]{display:none;}
 
-  .counter{position:relative;z-index:2;margin:20px 0 0;font-size:.85rem;color:var(--text-soft);opacity:.85;min-height:1.2em;}
+  .counter{position:relative;z-index:2;margin:20px 0 0;padding:0 26px;font-size:.85rem;color:var(--text-soft);opacity:.85;min-height:1.2em;}
 
   /* ---------- happy screen ---------- */
   .screen{transition:opacity .3s ease, transform .3s ease;}
@@ -274,14 +274,14 @@
     <div class="hearts-row" aria-hidden="true"><span></span><span></span><span></span></div>
     <h1>You said yes!</h1>
     <p class="sub">
-      Officially yours, officially the happiest person alive.<br>
-      This is going to be so good.
+      Officially yours, officially happyy<br>
+      We gonna match so perfect, Selinay — trust!
     </p>
     <div class="hearts-row" aria-hidden="true"><span></span><span></span><span></span></div>
     <button class="again" id="again" type="button">Ask me again ↺</button>
   </section>
 
-  <p class="foot">painted with a lot of hearts</p>
+  <p class="foot" id="foot">I'll wait for your answer :))</p>
 </div>
 
 <script>
@@ -365,16 +365,16 @@
     "But we'd be so cute together…",
     "Ouch. That one hurt a little",
     "You know the Yes button is right there",
-    "Come on, be brave",
+    "It would work out so well!!",
     "The No button is getting tired…",
-    "Okay, now it's just being stubborn",
-    "Still no? Bold move",
+    "So you don't want flowers from me…",
+    "Still no? You jokin', right?",
     "I can do this all day, you know",
     "Your heart says yes. I can tell",
-    "Look at it. It's tiny now",
-    "One more try. For me",
+    "Look at it. You have to choose the big button",
+    "Do you do aim training??",
     "Last chance to change your mind",
-    "That's it. No is out of order"
+    "These were misclicks, right? I think I have to erase the No :)"
   ];
   var MAX_NO = 16;
 
@@ -386,6 +386,7 @@
   var noBtn = document.getElementById("no");
   var counter = document.getElementById("counter");
   var againBtn = document.getElementById("again");
+  var foot = document.getElementById("foot");
   var noCount = 0;
 
   function setQuestion(text){
@@ -420,6 +421,7 @@
       ask.hidden = true;
       happy.hidden = false;
       happy.classList.add("in");
+      foot.hidden = true;
     }, 280);
   });
 
@@ -436,6 +438,7 @@
     happy.hidden = true;
     ask.hidden = false;
     ask.classList.remove("out");
+    foot.hidden = false;
   });
 
   /* --- heart confetti --- */
